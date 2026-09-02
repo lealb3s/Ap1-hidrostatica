@@ -46,6 +46,32 @@ def render():
                    "Trapezio e isso aparece na auditoria. Forcar o Trapezio em todo o "
                    "dominio reduz a ordem de precisao e tende a subestimar secoes convexas.")
 
+    st.divider()
+    st.markdown("#### Malha vertical de calculo")
+    st.caption("Quantas partes cada intervalo entre duas linhas d'agua e dividido antes "
+               "de integrar. As linhas d'agua originais continuam sendo nos da malha: "
+               "nenhuma geometria nova e inventada.")
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        opt["sub_vertical"] = st.select_slider(
+            "Subdivisoes por intervalo", options=[1, 2, 4, 8, 16],
+            value=int(opt.get("sub_vertical", 4)))
+    with c2:
+        if opt["sub_vertical"] == 1:
+            st.warning(
+                "Sem subdividir, a quantidade de intervalos abaixo do calado muda "
+                "conforme T sobe, e com ela a regra aplicada: um intervalo obriga o "
+                "Trapezio, dois liberam Simpson 1/3, tres liberam Simpson 3/8. A cada "
+                "troca a curva da um salto. Pior: em calados baixos, com um unico "
+                "intervalo, o Trapezio joga toda a area para o topo e devolve KB = T, "
+                "um valor impossivel. Use 1 apenas para comparar com o calculo manual "
+                "feito estritamente sobre as linhas d'agua da tabela.")
+        else:
+            st.success(
+                f"Cada intervalo vertical vira {opt['sub_vertical']} partes, entao a mesma "
+                "regra vale em toda a faixa de calados e as curvas ficam continuas. "
+                "Este e o ajuste recomendado, sobretudo com poucas linhas d'agua.")
+
     a1, a2 = st.tabs(["Auditoria calado a calado", "Malha fixa da tabela"])
 
     with a1:

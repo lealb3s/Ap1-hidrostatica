@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 
 import hidro as H
 from .comum import (W, exige_completa, botao_proximo, calado_maximo,
-                    numero_seguro, slider_seguro, rerodar)
+                    numero_seguro, slider_seguro, rerodar, opcoes, principais)
 
 
 def _coluna_T(df):
@@ -17,7 +17,7 @@ def _coluna_T(df):
 
 def _calcular():
     tab = st.session_state.tab
-    opt = st.session_state.opt
+    opt = opcoes()
     Tmax_d = calado_maximo()
 
     st.caption(f"O calculo e repetido para uma sequencia de calados. A tabela de cotas "
@@ -89,7 +89,7 @@ def render():
     if not exige_completa():
         return
     tab = st.session_state.tab
-    opt = st.session_state.opt
+    opt = opcoes()
 
     a1, a2, a3, a4 = st.tabs(["Hydrostatic Table", "Curvas", "Diagrama combinado",
                               "Consultar um calado"])
@@ -101,7 +101,7 @@ def render():
             st.dataframe(df_ht.style.format("{:.4f}"), height=430, **W())
             c1, c2 = st.columns(2)
             with c1:
-                xls = H.excel_hydrostatic_table(df_ht, tab, st.session_state.principais,
+                xls = H.excel_hydrostatic_table(df_ht, tab, principais(),
                                                 H.historico_df(),
                                                 pd.DataFrame(st.session_state.interp_regs))
                 st.download_button("Baixar em Excel (.xlsx)", xls, "hydrostatic_table.xlsx",

@@ -7,7 +7,7 @@ import streamlit as st
 import matplotlib.pyplot as plt
 
 import hidro as H
-from .comum import W, exige_completa, botao_proximo, origem_texto
+from .comum import W, exige_completa, botao_proximo, origem_texto, opcoes
 
 
 def resumo_df(r, tab, opt) -> pd.DataFrame:
@@ -120,7 +120,7 @@ def render():
     if not exige_completa():
         return
     tab = st.session_state.tab
-    opt = st.session_state.opt
+    opt = opcoes()
     T = float(st.session_state.get("T_sel") or 0.0)
 
     if T <= 1e-9:

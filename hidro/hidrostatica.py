@@ -37,16 +37,39 @@ def calado_max(tab: Tabela) -> float:
     return float(tab.z[-1] - tab.z[0])
 
 
-def malha_vertical(tab: Tabela, T: float):
-    """Niveis z de z_base ate z_base+T, incluindo o calado como ultimo ponto."""
+SUB_VERTICAL = 4     # subdivisoes por intervalo entre linhas d'agua
+
+
+def malha_vertical(tab: Tabela, T: float, sub: int = None):
+    """
+    Niveis z de z_base ate z_base+T, incluindo o calado como ultimo ponto.
+
+    Cada intervalo entre duas linhas d'agua e subdividido em `sub` partes iguais,
+    mantendo as linhas d'agua originais como nos da malha. Nada de geometria nova
+    e inventado: entre duas linhas d'agua a meia-boca ja e interpolada linearmente.
+    O que se ganha e integracao vertical CONSISTENTE.
+
+    Sem subdividir, a quantidade de intervalos abaixo do calado muda conforme T
+    sobe, e com ela a regra aplicada: um intervalo obriga o Trapezio, dois liberam
+    Simpson 1/3, tres liberam Simpson 3/8. A cada troca a curva da um salto, e em
+    calados baixos, com um unico intervalo, o Trapezio joga toda a area para o topo
+    e devolve KB = T, o que e impossivel. Subdividindo, a mesma regra vale em toda
+    a faixa de calados e as curvas ficam continuas.
+    """
+    sub = SUB_VERTICAL if sub is None else max(int(sub), 1)
     zb = z_base(tab)
     nivel = zb + T
-    zs = [z for z in tab.z if z <= nivel + 1e-9]
-    if not zs:
-        zs = [zb]
-    if abs(zs[-1] - nivel) > 1e-9:
-        zs = zs + [nivel]
-    return np.array(zs, float)
+    nos = [float(z) for z in tab.z if z <= nivel + 1e-9]
+    if not nos:
+        nos = [zb]
+    if abs(nos[-1] - nivel) > 1e-9:
+        nos.append(nivel)
+    if sub <= 1 or len(nos) < 2:
+        return np.array(nos, float)
+    fina = [nos[0]]
+    for a, b in zip(nos[:-1], nos[1:]):
+        fina.extend(np.linspace(a, b, sub + 1)[1:])
+    return np.array(fina, float)
 
 
 def y_interp_z(tab: Tabela, i: int, zq: float) -> float:
@@ -57,16 +80,16 @@ def y_interp_z(tab: Tabela, i: int, zq: float) -> float:
     return float(np.interp(zq, tab.z, np.nan_to_num(y, nan=0.0)))
 
 
-def perfil_secao(tab: Tabela, i: int, T: float):
+def perfil_secao(tab: Tabela, i: int, T: float, sub=None):
     """(zs, ys) do contorno submerso da baliza i para o calado T."""
-    zs = malha_vertical(tab, T)
+    zs = malha_vertical(tab, T, sub)
     ys = np.array([y_interp_z(tab, i, zz) for zz in zs], float)
     return zs, ys
 
 
 # --- S6.1 Areas seccionais (Modulo 4) --------------------------------------
 
-def areas_seccionais(tab: Tabela, T: float, metodo="auto"):
+def areas_seccionais(tab: Tabela, T: float, metodo="auto", sub=None):
     """
     A_i(T) = 2 * integral de y dz, de z_base ate z_base+T, para cada baliza.
     Retorna (A, detalhes) onde detalhes traz a tabela passo a passo por baliza.
@@ -74,7 +97,7 @@ def areas_seccionais(tab: Tabela, T: float, metodo="auto"):
     A = np.zeros(tab.n_est)
     detalhes = []
     for i in range(tab.n_est):
-        zs, ys = perfil_secao(tab, i, T)
+        zs, ys = perfil_secao(tab, i, T, sub)
         if len(zs) < 2:
             A[i] = 0.0
             detalhes.append({"baliza": tab.rotulos[i], "df": pd.DataFrame(), "aud": [],
@@ -134,14 +157,14 @@ def plano_dagua(tab: Tabela, T: float, metodo="auto", eixo_IL="LCF"):
 
 # --- S6.3 Volumes (Modulo 6) ----------------------------------------------
 
-def volumes(tab: Tabela, T: float, metodo_x="auto", metodo_z="auto"):
+def volumes(tab: Tabela, T: float, metodo_x="auto", metodo_z="auto", sub=None):
     """
     Vol_L = int A(x) dx        (integracao longitudinal)
     Vol_V = int A_WP(z) dz     (integracao vertical, caminho independente)
     E_vol = |Vol_L - Vol_V| / |Vol_L| * 100
     Tambem devolve LCB (do caminho longitudinal) e KB (do caminho vertical).
     """
-    A, det_A = areas_seccionais(tab, T, metodo_z)
+    A, det_A = areas_seccionais(tab, T, metodo_z, sub)
     x = tab.x
     ax, multx, _ = pesos_integracao(x, metodo_x)
     VOL_L = float(np.dot(ax, A))
@@ -151,7 +174,7 @@ def volumes(tab: Tabela, T: float, metodo_x="auto", metodo_z="auto"):
                          "a_i * A": ax * A, "a_i * A * x": ax * A * x})
     _, aud_L = integrar(x, A, metodo_x, "estacoes")
 
-    zs = malha_vertical(tab, T)
+    zs = malha_vertical(tab, T, sub)
     AWPz = np.array([plano_dagua(tab, zz - z_base(tab), metodo_x)["AWP"] for zz in zs], float)
     az, multz, _ = pesos_integracao(zs, metodo_z)
     VOL_V = float(np.dot(az, AWPz))
@@ -171,7 +194,7 @@ def volumes(tab: Tabela, T: float, metodo_x="auto", metodo_z="auto"):
 
 # --- S6.4 Superficie molhada (item 18) -------------------------------------
 
-def superficie_molhada(tab: Tabela, T: float, metodo_x="auto"):
+def superficie_molhada(tab: Tabela, T: float, metodo_x="auto", sub=None):
     """
     Metodo do perimetro molhado (girth):
       1) em cada baliza, o contorno submerso e discretizado pelos pontos (y, z)
@@ -184,7 +207,7 @@ def superficie_molhada(tab: Tabela, T: float, metodo_x="auto"):
     """
     s = np.zeros(tab.n_est)
     for i in range(tab.n_est):
-        zs, ys = perfil_secao(tab, i, T)
+        zs, ys = perfil_secao(tab, i, T, sub)
         comp = float(ys[0])                      # meia-largura do fundo
         comp += float(np.sum(np.sqrt(np.diff(ys) ** 2 + np.diff(zs) ** 2)))
         s[i] = comp
@@ -202,10 +225,11 @@ def hidrostatica(tab: Tabela, T: float, opt: dict) -> dict:
     mz = opt.get("metodo_z", "auto")
     rho = float(opt.get("rho", 1.025))
     eixo_IL = opt.get("eixo_IL", "LCF")
+    sub = opt.get("sub_vertical", SUB_VERTICAL)
 
-    v = volumes(tab, T, mx, mz)
+    v = volumes(tab, T, mx, mz, sub)
     pw = plano_dagua(tab, T, mx, eixo_IL)
-    WSA, df_wsa = superficie_molhada(tab, T, mx)
+    WSA, df_wsa = superficie_molhada(tab, T, mx, sub)
 
     escolha = opt.get("volume_adotado", "longitudinal")
     VOL = {"longitudinal": v["VOL_L"], "vertical": v["VOL_V"],

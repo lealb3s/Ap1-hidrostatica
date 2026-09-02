@@ -11,6 +11,7 @@ Cada modulo cuida de uma etapa, na ordem em que os dados percorrem o programa:
     hidrostatica.py  areas, volumes, centros, metacentro, coeficientes, WSA
     graficos.py      plano de linhas, casco 3D e curvas
     relatorio.py     relatorio HTML e exportacao para Excel
+    pdf.py           relatorio final em PDF
 
 Para mexer em uma formula, abra o modulo correspondente: nada mais precisa mudar.
 """
@@ -22,3 +23,4 @@ from .integracao import *    # noqa: F401,F403
 from .hidrostatica import *  # noqa: F401,F403
 from .graficos import *      # noqa: F401,F403
 from .relatorio import *     # noqa: F401,F403
+from .pdf import *           # noqa: F401,F403

@@ -439,3 +439,141 @@ def remover_duplicatas(tab: Tabela) -> tuple:
     t.origem = t.origem[np.ix_(manter_i, manter_j)]
     t.rotulos = [t.rotulos[i] for i in manter_i]
     return t, removidas
+
+
+# ---------------------------------------------------------------------------
+# S4.1 - REFINAMENTO DA TABELA POR INTERPOLACAO
+# ---------------------------------------------------------------------------
+#
+# Uma tabela de cotas com poucas balizas e poucas linhas d'agua descreve mal um
+# casco curvo: entre dois pontos o programa so pode supor uma reta, e areas e
+# volumes saem subestimados nas regioes de maior curvatura, tipicamente o bojo.
+#
+# Refinar acrescenta pontos INTERMEDIARIOS entre os dados originais. Isso nao
+# cria informacao nova: apenas troca a suposicao "reta entre dois pontos" por
+# uma curva suave que passa exatamente pelos mesmos pontos. Para um casco de
+# verdade, que e suave, a curva costuma ser a suposicao mais proxima da realidade.
+#
+# Duas opcoes de curva:
+#   linear    -> mantem a reta entre pontos. Refinar nao muda nada; serve so
+#                para deixar a malha uniforme.
+#   monotona  -> cubica de Hermite com as inclinacoes de Fritsch-Carlson. Passa
+#                pelos pontos originais, e suave, e nunca inventa ondulacoes nem
+#                ultrapassa os valores vizinhos, ao contrario de uma spline comum.
+#                E a escolha adequada para meias-bocas, que nao devem oscilar.
+# ---------------------------------------------------------------------------
+
+def interp_monotona(x, y, xq):
+    """
+    Interpolacao cubica de Hermite com inclinacoes de Fritsch-Carlson.
+
+    Preserva a monotonicidade dos dados: onde as meias-bocas so crescem, a curva
+    so cresce, sem os sobressinais que uma spline cubica comum produziria perto
+    do bojo ou do convés.
+    """
+    x = np.asarray(x, float)
+    y = np.asarray(y, float)
+    xq = np.atleast_1d(np.asarray(xq, float))
+    n = len(x)
+    if n < 3:
+        return np.interp(xq, x, y)
+
+    h = np.diff(x)
+    delta = np.diff(y) / h
+
+    # inclinacao em cada no
+    m = np.zeros(n)
+    m[0] = delta[0]
+    m[-1] = delta[-1]
+    for i in range(1, n - 1):
+        if delta[i - 1] * delta[i] <= 0:
+            m[i] = 0.0                      # extremo local: tangente horizontal
+        else:
+            w1 = 2 * h[i] + h[i - 1]
+            w2 = h[i] + 2 * h[i - 1]
+            m[i] = (w1 + w2) / (w1 / delta[i - 1] + w2 / delta[i])
+
+    # limitador de Fritsch-Carlson: impede sobressinal em cada trecho
+    for i in range(n - 1):
+        if abs(delta[i]) < 1e-15:
+            m[i] = m[i + 1] = 0.0
+        else:
+            a, b = m[i] / delta[i], m[i + 1] / delta[i]
+            s = a * a + b * b
+            if s > 9.0:
+                t = 3.0 / np.sqrt(s)
+                m[i] = t * a * delta[i]
+                m[i + 1] = t * b * delta[i]
+
+    idx = np.clip(np.searchsorted(x, xq) - 1, 0, n - 2)
+    dx = xq - x[idx]
+    hh = h[idx]
+    t = dx / hh
+    t2, t3 = t * t, t * t * t
+    h00 = 2 * t3 - 3 * t2 + 1
+    h10 = t3 - 2 * t2 + t
+    h01 = -2 * t3 + 3 * t2
+    h11 = t3 - t2
+    return h00 * y[idx] + h10 * hh * m[idx] + h01 * y[idx + 1] + h11 * hh * m[idx + 1]
+
+
+def _interpolar(x, y, xq, metodo="monotona"):
+    bons = np.isfinite(y)
+    if bons.sum() < 2:
+        return np.zeros_like(np.atleast_1d(xq), dtype=float)
+    if metodo == "monotona" and bons.sum() >= 3:
+        return interp_monotona(np.asarray(x)[bons], np.asarray(y)[bons], xq)
+    return np.interp(xq, np.asarray(x)[bons], np.asarray(y)[bons])
+
+
+def refinar_tabela(tab: Tabela, fator_x: int = 1, fator_z: int = 1,
+                   metodo: str = "monotona") -> tuple:
+    """
+    Devolve (nova_tabela, resumo) com pontos intermediarios entre os originais.
+
+    fator_x = 2 coloca uma baliza entre cada par de balizas; fator_z = 2 faz o
+    mesmo com as linhas d'agua. Os pontos originais permanecem na tabela e
+    continuam marcados como vindos do arquivo.
+    """
+    fator_x = max(int(fator_x), 1)
+    fator_z = max(int(fator_z), 1)
+    if fator_x == 1 and fator_z == 1:
+        return tab.copia(), {"balizas": tab.n_est, "linhas_agua": tab.n_wl, "gerados": 0}
+
+    def malha(v, f):
+        if f <= 1:
+            return np.asarray(v, float)
+        saida = [float(v[0])]
+        for a, b in zip(v[:-1], v[1:]):
+            saida.extend(np.linspace(a, b, f + 1)[1:])
+        return np.array(saida, float)
+
+    x_novo = malha(tab.x, fator_x)
+    z_novo = malha(tab.z, fator_z)
+
+    # primeiro ao longo de z, em cada baliza original
+    Y1 = np.zeros((tab.n_est, len(z_novo)))
+    for i in range(tab.n_est):
+        Y1[i] = np.clip(_interpolar(tab.z, tab.Y[i], z_novo, metodo), 0.0, None)
+    # depois ao longo de x, em cada linha d'agua da malha nova
+    Y2 = np.zeros((len(x_novo), len(z_novo)))
+    for j in range(len(z_novo)):
+        Y2[:, j] = np.clip(_interpolar(tab.x, Y1[:, j], x_novo, metodo), 0.0, None)
+
+    rot = []
+    for xi in x_novo:
+        k = int(np.argmin(np.abs(np.asarray(tab.x) - xi)))
+        rot.append(tab.rotulos[k] if abs(tab.x[k] - xi) < 1e-9
+                   else f"{tab.rotulos[k]}+")
+
+    novo = nova_tabela(x_novo, z_novo, Y2, rot, tab.unidade)
+    orig_x = np.isclose(x_novo[:, None], np.asarray(tab.x)[None, :], atol=1e-9).any(axis=1)
+    orig_z = np.isclose(z_novo[:, None], np.asarray(tab.z)[None, :], atol=1e-9).any(axis=1)
+    marca = orig_x[:, None] & orig_z[None, :]
+    novo.original = marca & np.isfinite(Y2)
+    nome = {"monotona": "cubica monotona (Fritsch-Carlson)", "linear": "linear"}[metodo]
+    novo.origem = np.where(novo.original, "arquivo",
+                           f"refinamento por interpolacao {nome}").astype(object)
+    resumo = {"balizas": len(x_novo), "linhas_agua": len(z_novo),
+              "gerados": int((~novo.original).sum()), "metodo": nome}
+    return novo, resumo

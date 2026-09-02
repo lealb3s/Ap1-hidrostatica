@@ -341,3 +341,72 @@ def fig_para_png(fig) -> bytes:
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
     return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# S8.1 - CASCO 3D INTERATIVO
+# ---------------------------------------------------------------------------
+
+def plot_3d_interativo(tab: Tabela, T=None, superficie=True, exagero=1.0,
+                       mostrar_balizas=True, mostrar_linhas=True):
+    """
+    Mesmo casco do `plot_3d`, mas em Plotly: o usuario gira, aproxima e desloca
+    a vista com o mouse, dentro da propria tela, sem depender de sliders.
+
+    Devolve None quando o Plotly nao esta instalado, para que a interface possa
+    cair no desenho estatico do matplotlib.
+    """
+    try:
+        import plotly.graph_objects as go
+    except ImportError:
+        return None
+
+    Y = np.nan_to_num(tab.Y, nan=0.0)
+    X, Z = np.meshgrid(tab.x, tab.z, indexing="ij")
+    fig = go.Figure()
+
+    if superficie:
+        for lado in (1.0, -1.0):
+            fig.add_trace(go.Surface(
+                x=X, y=lado * Y, z=Z, showscale=False, opacity=0.85,
+                colorscale=[[0, "#3d6f8e"], [1, "#a8cadd"]], surfacecolor=Z,
+                hovertemplate="x %{x:.3f} m<br>y %{y:.3f} m<br>z %{z:.3f} m<extra></extra>"))
+
+    if mostrar_balizas:
+        for i in range(tab.n_est):
+            for lado in (1.0, -1.0):
+                fig.add_trace(go.Scatter3d(
+                    x=np.full(tab.n_wl, tab.x[i]), y=lado * Y[i], z=tab.z,
+                    mode="lines", line=dict(color="#16394f", width=3),
+                    showlegend=False, hoverinfo="skip"))
+    if mostrar_linhas:
+        for j in range(tab.n_wl):
+            for lado in (1.0, -1.0):
+                fig.add_trace(go.Scatter3d(
+                    x=tab.x, y=lado * Y[:, j], z=np.full(tab.n_est, tab.z[j]),
+                    mode="lines", line=dict(color="#16394f", width=2),
+                    opacity=0.55, showlegend=False, hoverinfo="skip"))
+
+    if T is not None and T > 0:
+        nivel = z_base(tab) + T
+        ymax = float(np.nanmax(Y)) * 1.15 + 1e-6
+        xx, yy = np.meshgrid([float(tab.x[0]), float(tab.x[-1])], [-ymax, ymax])
+        fig.add_trace(go.Surface(
+            x=xx, y=yy, z=np.full_like(xx, nivel, dtype=float), showscale=False,
+            opacity=0.25, colorscale=[[0, COR_AGUA], [1, COR_AGUA]],
+            name="linha d'agua", hoverinfo="skip"))
+
+    Lx = float(tab.x[-1] - tab.x[0]) or 1.0
+    Ly = (2 * float(np.nanmax(Y)) or 1.0) * exagero
+    Lz = (float(tab.z[-1] - tab.z[0]) or 1.0) * exagero
+    maior = max(Lx, Ly, Lz)
+    fig.update_layout(
+        scene=dict(
+            xaxis_title="x (m)", yaxis_title="y (m)", zaxis_title="z (m)",
+            aspectmode="manual",
+            aspectratio=dict(x=Lx / maior, y=Ly / maior, z=Lz / maior),
+            camera=dict(eye=dict(x=1.6, y=-1.5, z=0.9)),
+        ),
+        margin=dict(l=0, r=0, t=10, b=0), height=620,
+        paper_bgcolor="rgba(0,0,0,0)")
+    return fig

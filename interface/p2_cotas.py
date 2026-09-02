@@ -13,7 +13,7 @@ import pandas as pd
 import streamlit as st
 
 import hidro as H
-from .comum import W, rerodar, botao_proximo, tem_tabela
+from .comum import W, rerodar, botao_proximo, tem_tabela, principais
 
 
 def _guardar(t, arquivo=None):
@@ -127,8 +127,8 @@ def _importar():
             st.markdown("**Alturas das linhas d'agua lidas:** " +
                         "; ".join(H.fmt(v, 3) for v in det.z_valores))
             st.markdown(f"**Altura total coberta pela tabela: {H.fmt(alt)} m**")
-            D = st.session_state.principais.get("D") or 0.0
-            Td = st.session_state.principais.get("Td") or 0.0
+            D = principais().get("D") or 0.0
+            Td = principais().get("Td") or 0.0
             suspeito = (alt <= 1e-9
                         or (D > 0 and (alt < 0.3 * D or alt > 3 * D))
                         or (Td > 0 and alt < Td))
@@ -149,7 +149,7 @@ def _importar():
                        "Sem elas a integracao vertical fica sem escala e areas, volumes e "
                        "KB saem errados.")
             z_sug, expl = H.alturas_sugeridas(
-                gu, n_wl, st.session_state.principais.get("Td") or None)
+                gu, n_wl, principais().get("Td") or None)
             if z_sug:
                 st.success(
                     f"**Encontrei uma pista no proprio arquivo:** {expl}.\n\n"
@@ -180,7 +180,7 @@ def _importar():
                     [{"Grandeza": k, "Rotulo na planilha": onde, "Valor": v}
                      for k, (v, onde) in uteis.items()]), hide_index=True, **W())
                 if st.button("Preencher a etapa 1 com estes valores"):
-                    p = st.session_state.principais
+                    p = principais()
                     mapa = {"comprimento": "LPP", "boca": "B",
                             "pontal": "D", "calado": "Td"}
                     for k, destino in mapa.items():
@@ -244,14 +244,14 @@ def _importar():
                                   value=(lz == 0))
         if usar_manual:
             z_sug, _expl = H.alturas_sugeridas(
-                gu, n_wl_prev, st.session_state.principais.get("Td") or None)
+                gu, n_wl_prev, principais().get("Td") or None)
             dz_pad = (z_sug[1] - z_sug[0]) if (z_sug and len(z_sug) > 1) else 1.0
             z_manual = _alturas_manuais(n_wl_prev, "ajuste", dz_pad)
 
         x_manual = None
         if cx == 0:
             st.warning("Sem coluna X o aplicativo nao conhece as posicoes das balizas.")
-            lpp = st.session_state.principais.get("LPP") or 0.0
+            lpp = principais().get("LPP") or 0.0
             if lpp > 0:
                 x_manual = list(np.linspace(0.0, lpp, n_est_prev))
                 st.caption(f"Serao geradas a partir do LPP: h = LPP/(n-1) = "
@@ -291,7 +291,7 @@ def _importar():
 
 def _ajustes():
     tab = st.session_state.tab
-    p = st.session_state.principais
+    p = principais()
 
     alerta = H.coerencia_alturas(tab, p)
     if alerta:

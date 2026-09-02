@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 import hidro as H
-from .comum import W, exige_tabela, origem_texto
+from .comum import W, exige_tabela, origem_texto, principais, opcoes
 from .p5_calado import resumo_df
 
 
@@ -19,7 +19,7 @@ def render():
         return
 
     tab = st.session_state.tab
-    opt = st.session_state.opt
+    opt = opcoes()
     completa = bool(np.isfinite(tab.Y).all())
 
     c1, c2, c3 = st.columns(3)
@@ -43,9 +43,9 @@ def render():
         with st.spinner("Montando o relatorio..."):
             achados = st.session_state.get("achados")
             if achados is None:
-                achados = H.diagnosticar(tab, st.session_state.principais)
+                achados = H.diagnosticar(tab, principais())
             ctx = {
-                "principais": {**st.session_state.principais,
+                "principais": {**principais(),
                                "densidade rho (t/m3)": opt.get("rho")},
                 "tab": tab, "opt": opt, "unidade_origem": tab.unidade,
                 "origem_txt": origem_texto(opt),
@@ -105,14 +105,14 @@ def render():
 
     html = st.session_state.get("relatorio_html")
     if html:
-        nome = (st.session_state.principais.get("nome") or "embarcacao").replace(" ", "_")
+        nome = (principais().get("nome") or "embarcacao").replace(" ", "_")
         c1, c2 = st.columns(2)
         c1.download_button("Baixar o relatorio (.html)", html.encode("utf-8"),
                            f"relatorio_hidrostatico_{nome}.html", "text/html",
                            type="primary", **W())
         if st.session_state.df_ht is not None:
             xls = H.excel_hydrostatic_table(st.session_state.df_ht, tab,
-                                            st.session_state.principais, H.historico_df(),
+                                            principais(), H.historico_df(),
                                             pd.DataFrame(st.session_state.interp_regs))
             c2.download_button("Baixar a Hydrostatic Table (.xlsx)", xls,
                                "hydrostatic_table.xlsx",

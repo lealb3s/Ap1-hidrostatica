@@ -27,6 +27,27 @@ div[data-testid="stMetricValue"]{font-size:1.3rem}
 </style>
 """, unsafe_allow_html=True)
 
+# ---------------------------------------------------------------------------
+# Conferencia do pacote de calculo
+#
+# O pacote hidro reune suas funcoes no arquivo hidro/__init__.py. Se esse arquivo
+# for enviado vazio ou incompleto, "import hidro" continua funcionando, mas nao
+# traz funcao nenhuma junto: o programa so quebra bem mais tarde, com um erro que
+# nao diz qual e o problema. Aqui o pacote e remontado na hora, a partir dos
+# proprios modulos, para que isso nunca derrube o aplicativo.
+# ---------------------------------------------------------------------------
+import hidro as _hidro                                            # noqa: E402
+
+if not hasattr(_hidro, "fmt"):
+    from hidro import (base as _base, leitura as _leitura, tabela as _tabela,
+                       integracao as _integracao, hidrostatica as _hidrostatica,
+                       graficos as _graficos, relatorio as _relatorio)
+    for _mod in (_base, _leitura, _tabela, _integracao, _hidrostatica,
+                 _graficos, _relatorio):
+        for _nome in dir(_mod):
+            if not _nome.startswith("_"):
+                setattr(_hidro, _nome, getattr(_mod, _nome))
+
 from interface import comum                                    # noqa: E402
 from interface import (inicio, p1_dados, p2_cotas, p3_geometria,  # noqa: E402
                        p4_metodos, p5_calado, p6_curvas,

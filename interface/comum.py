@@ -48,9 +48,41 @@ PADRAO = {
 
 
 def iniciar_estado():
+    """
+    Garante que o estado da sessao existe E tem o tipo certo.
+
+    A verificacao de tipo importa: uma aba aberta antes de uma atualizacao do
+    programa continua com o estado antigo na memoria do navegador, e uma chave
+    que virou None ou mudou de formato derruba a barra lateral em toda execucao,
+    sem deixar caminho de volta. Aqui a chave estragada e simplesmente refeita.
+    """
     for k, v in PADRAO.items():
-        if k not in st.session_state:
+        atual = st.session_state.get(k, None)
+        precisa = (k not in st.session_state)
+        if not precisa and isinstance(v, (dict, list)):
+            precisa = not isinstance(atual, type(v))
+        if precisa:
             st.session_state[k] = (v.copy() if isinstance(v, (dict, list)) else v)
+
+
+def principais() -> dict:
+    """Dados do navio, sempre como dicionario."""
+    p = st.session_state.get("principais")
+    if not isinstance(p, dict):
+        p = PADRAO["principais"].copy()
+        st.session_state["principais"] = p
+    return p
+
+
+def opcoes() -> dict:
+    """Convencoes de calculo, sempre como dicionario e sem chave faltando."""
+    o = st.session_state.get("opt")
+    if not isinstance(o, dict):
+        o = PADRAO["opt"].copy()
+        st.session_state["opt"] = o
+    for k, v in PADRAO["opt"].items():
+        o.setdefault(k, v)
+    return o
 
 
 def rerodar():
@@ -198,7 +230,8 @@ def barra_lateral() -> str:
 
         pagina = st.radio("Etapas", PAGINAS, key="pagina", label_visibility="collapsed")
 
-        p = st.session_state.principais
+        p = principais()
+        o = opcoes()
         if any(p.get(k) for k in ("nome", "LPP", "B", "D", "Td")):
             st.divider()
             st.markdown("**Dados do navio**")
@@ -207,12 +240,12 @@ def barra_lateral() -> str:
                       ("Boca B", f"{H.fmt(p.get('B'), 2)} m"),
                       ("Pontal D", f"{H.fmt(p.get('D'), 2)} m"),
                       ("Calado Td", f"{H.fmt(p.get('Td'), 2)} m"),
-                      ("rho", f"{H.fmt(st.session_state.opt.get('rho'), 3)} t/m3")]
+                      ("rho", f"{H.fmt(o.get('rho'), 3)} t/m3")]
             st.dataframe(pd.DataFrame(linhas, columns=["Grandeza", "Valor"]),
                          hide_index=True, **W())
 
         st.divider()
-        t = st.session_state.tab
+        t = st.session_state.get("tab")
         if t is None:
             st.caption("Tabela de cotas: nao carregada")
         else:

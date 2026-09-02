@@ -80,17 +80,37 @@ def render():
             st.info("O 3D so e gerado com a tabela completa. Volte a etapa 2 para "
                     "preencher as lacunas.")
         else:
-            c1, c2 = st.columns([1, 3])
-            with c1:
-                sup = st.checkbox("Mostrar superficie", value=True)
-                exa = st.slider("Exagero visual de y e z", 1.0, 6.0, 1.0, 0.5,
-                                help="1,0 mantem a escala real. Serve so para enxergar "
-                                     "melhor; nao altera nenhum calculo.")
-                elev = st.slider("Elevacao da camera", 0, 80, 22)
-                azim = st.slider("Rotacao da camera", -180, 180, -125)
-            with c2:
-                fig = H.plot_3d(tab, T, sup, exa, elev, azim)
-                st.pyplot(fig, **W())
-                plt.close(fig)
+            fig3d = H.plot_3d_interativo(tab, T, True, 1.0)
+            if fig3d is not None:
+                st.plotly_chart(fig3d, **W())
+                st.caption("Gire arrastando com o botao esquerdo, aproxime com a rolagem "
+                           "e desloque arrastando com o botao direito. Um duplo clique "
+                           "volta a vista inicial.")
+                with st.expander("Ajustar o desenho"):
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        sup = st.checkbox("Mostrar a superficie", value=True)
+                        bal = st.checkbox("Mostrar as balizas", value=True)
+                    with c2:
+                        lin = st.checkbox("Mostrar as linhas d'agua", value=True)
+                        exa = st.slider("Exagero visual de y e z", 1.0, 6.0, 1.0, 0.5,
+                                        help="1,0 mantem a escala real. Serve so para "
+                                             "enxergar melhor; nao altera nenhum calculo.")
+                    if not (sup and bal and lin) or exa != 1.0:
+                        st.plotly_chart(H.plot_3d_interativo(tab, T, sup, exa, bal, lin),
+                                        key="p3d_ajustado", **W())
+            else:
+                st.info("O Plotly nao esta instalado, entao o casco aparece como desenho "
+                        "estatico. Instale com: pip install plotly")
+                c1, c2 = st.columns([1, 3])
+                with c1:
+                    sup = st.checkbox("Mostrar superficie", value=True)
+                    exa = st.slider("Exagero visual de y e z", 1.0, 6.0, 1.0, 0.5)
+                    elev = st.slider("Elevacao da camera", 0, 80, 22)
+                    azim = st.slider("Rotacao da camera", -180, 180, -125)
+                with c2:
+                    fig = H.plot_3d(tab, T, sup, exa, elev, azim)
+                    st.pyplot(fig, **W())
+                    plt.close(fig)
 
     botao_proximo("4. Metodos de calculo")

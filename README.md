@@ -1,147 +1,119 @@
-# Aplicativo de Cálculo Hidrostático — AP1.1
+# Aplicativo de Calculo Hidrostatico - AP1.1
 
-Aplicativo que transforma uma **tabela de cotas** em **propriedades hidrostáticas**,
-**Hydrostatic Table** e **Hydrostatic Curves**, com auditoria completa de cada etapa.
+Transforma uma **tabela de cotas** em **propriedades hidrostaticas**, **Hydrostatic Table**
+e **Hydrostatic Curves**, mostrando cada conta pelo caminho.
 
-Filosofia adotada: **DETECTAR → EXPLICAR → AVISAR → APRESENTAR AS CONSEQUÊNCIAS → O USUÁRIO DECIDE.**
-Nada é corrigido em silêncio, o arquivo importado nunca é modificado e toda decisão fica
-registrada no histórico e no relatório.
+Filosofia: **DETECTAR -> EXPLICAR -> AVISAR -> APRESENTAR AS CONSEQUENCIAS -> O USUARIO DECIDE.**
+Nada e corrigido em silencio, o arquivo importado nunca e alterado e toda decisao fica
+registrada no historico e no relatorio.
 
----
-
-## 1. Requisitos
-
-- **Python 3.10 ou superior** (testado em 3.12)
-- Bibliotecas listadas em `requirements.txt`:
-  `streamlit`, `numpy`, `pandas`, `matplotlib`, `openpyxl` e `xlrd` (este último só é
-  necessário para abrir arquivos `.xls` antigos)
-
-Nenhuma biblioteca entrega propriedades hidrostáticas prontas. As regras de integração
-(Trapézio, Simpson 1/3 e Simpson 3/8) e todo o algoritmo hidrostático estão implementados
-diretamente no código, na seção `S5` e `S6` do `app.py`.
-
-## 2. Instalação
+## Instalacao e execucao
 
 ```bash
 pip install -r requirements.txt
-```
-
-## 3. Execução
-
-```bash
 streamlit run app.py
 ```
 
-O navegador abre automaticamente em `http://localhost:8501`.
-
-Para conferir o núcleo de cálculo sem abrir a interface:
+Conferir o nucleo de calculo sem abrir a interface:
 
 ```bash
-python testes.py
+python testes_nucleo.py
 ```
 
-Os testes comparam o aplicativo com **duas soluções analíticas exatas** (barcaça
-paralelepipédica e casco em V prismático), verificam a exatidão das regras de integração,
-a leitura de sete formatos diferentes de tabela de cotas e o comportamento das curvas.
+## Organizacao dos arquivos
 
-## 4. Estrutura do código
+O programa esta dividido em modulos pequenos: para mexer numa formula, abra o arquivo
+correspondente e nada mais precisa mudar.
 
-O aplicativo é um **arquivo único** (`app.py`), dividido em seções marcadas com `S`:
+```
+app.py                      ponto de entrada: monta a pagina e chama a tela
 
-| Seção | Conteúdo |
-|-------|----------|
-| `S0`  | Imports, constantes e lista das propriedades |
-| `S1`  | Utilitários: leitura de números, unidades, histórico e auditoria |
-| `S2`  | Leitura de arquivos e **detecção automática do layout** da tabela de cotas |
-| `S3`  | Modelo canônico da tabela e **diagnóstico geométrico** |
-| `S4`  | Interpolação linear auditável |
-| `S5`  | **Integração numérica**: Trapézio, Simpson 1/3, Simpson 3/8 e auditoria por trecho |
-| `S6`  | Núcleo hidrostático: áreas, plano d'água, volumes, centros, metacentro, coeficientes e WSA |
-| `S7`  | Hydrostatic Table, consulta numérica e validações |
-| `S8`  | Gráficos: plano de linhas, seções, curvas e 3D |
-| `S9`  | Relatório HTML e exportações |
-| `S10` | Interface Streamlit (Módulos 1 a 7) |
+hidro/                      CALCULO
+  base.py                   constantes, leitura de numeros, unidades, historico
+  leitura.py                abre o arquivo e descobre o layout da tabela de cotas
+  tabela.py                 modelo da tabela, diagnostico geometrico, interpolacao
+  integracao.py             Trapezio, Simpson 1/3 e Simpson 3/8 com auditoria
+  hidrostatica.py           areas, volumes, centros, metacentro, coeficientes, WSA
+  graficos.py               plano de linhas, casco 3D, curvas
+  relatorio.py              relatorio HTML e exportacao para Excel
 
-## 5. Módulos do aplicativo
+interface/                  TELAS (uma por etapa)
+  comum.py                  estado, barra lateral, widgets protegidos
+  inicio.py                 abertura: formatos aceitos e roteiro
+  p1_dados.py               1. dados do navio
+  p2_cotas.py               2. tabela de cotas
+  p3_geometria.py           3. conferir a geometria
+  p4_metodos.py             4. metodos de calculo
+  p5_calado.py              5. resultados no calado
+  p6_curvas.py              6. tabela e curvas
+  p7_validacao.py           7. validacao
+  p8_relatorio.py           relatorio final
 
-1. **Módulo 1 — Projeto e dados**: dados principais, densidade, referências, unidades,
-   importação ou digitação da tabela de cotas e seleção dos cálculos.
-2. **Módulo 2 — Geometria e validação**: tabela de trabalho editável, verificação
-   automática, plano de linhas e casco 3D.
-3. **Módulo 3 — Interpolação e integração**: preenchimento de lacunas com registro de
-   método, pontos usados e valor obtido; escolha e auditoria das regras de integração.
-4. **Módulo 4 — Cálculo hidrostático**: propriedades para um calado escolhido no slider,
-   com a função obrigatória **MOSTRAR CÁLCULO** (dados, fórmula, valores intermediários,
-   resultado e unidade).
-5. **Módulo 5 — Hydrostatic Table**: varredura de T_min a T_max com passo ΔT, exportável
-   para Excel.
-6. **Módulo 6 — Hydrostatic Curves**: as 15 curvas obrigatórias, diagrama combinado e
-   consulta numérica de qualquer ponto.
-7. **Módulo 7 — Validação e auditoria**: validação analítica, consistência interna,
-   comparação com o Maxsurf e histórico completo.
-8. **Relatório final**: documento HTML único com todo o procedimento.
+exemplos/                   tabelas de cotas de teste, o mesmo casco em tres formatos
+testes_nucleo.py            validacao analitica e testes do nucleo
+requirements.txt            dependencias
+```
 
-## 6. Formatos de tabela de cotas aceitos
+**Onde mexer em cada coisa:**
 
-Extensões: `.xlsx`, `.xlsm`, `.xls`, `.csv`, `.txt`, `.tsv`.
+| Quero mudar | Arquivo |
+|---|---|
+| uma formula hidrostatica | `hidro/hidrostatica.py` |
+| as regras de integracao | `hidro/integracao.py` |
+| como um arquivo e lido | `hidro/leitura.py` |
+| o aspecto de um grafico | `hidro/graficos.py` |
+| o conteudo do relatorio | `hidro/relatorio.py` |
+| o texto ou o layout de uma tela | o arquivo da tela em `interface/` |
 
-Layouts reconhecidos automaticamente:
+## Formatos de tabela de cotas aceitos
 
-- **Linhas d'água nas colunas** e balizas nas linhas, com ou sem linha de alturas `z`
-- **Linhas d'água nas linhas** (tabela transposta)
-- Altura embutida no rótulo da coluna (`WL 2.5`)
-- **Formato longo** com três colunas: `x`, `z`, `y`
-- Matriz sem cabeçalho de texto
-- Vírgula ou ponto decimal, separador `;` `,` tabulação ou `|`
+Extensoes `.xlsx`, `.xlsm`, `.xls`, `.csv`, `.txt`, `.tsv`. Layouts reconhecidos:
 
-Se a detecção automática errar, **tudo pode ser corrigido na própria interface**
-(orientação, coluna de X, linha de alturas `z`, primeira e última linha e coluna, unidade).
-Nenhuma alteração no código-fonte é necessária para processar um casco desconhecido.
+- linhas d'agua nas colunas, balizas nas linhas (com ou sem linha de alturas z)
+- linhas d'agua nas linhas, balizas nas colunas (transposta)
+- altura embutida no rotulo da coluna, como `WL 2.5`
+- tres colunas simples: `x`, `z`, `y`
+- matriz sem cabecalho de texto
+- virgula ou ponto decimal; separador `;` `,` tabulacao ou `|`
 
-Há quatro arquivos de teste em `exemplos/`, o mesmo casco gravado em três layouts
-diferentes mais a barcaça de validação analítica.
+Se a leitura automatica errar, **tudo pode ser corrigido na etapa 2**: orientacao, primeira
+e ultima linha e coluna, coluna do X, linha das alturas z, e as proprias alturas podem ser
+digitadas na mao. Nenhuma alteracao no codigo-fonte e necessaria para processar uma
+embarcacao desconhecida.
 
-## 7. Convenções adotadas
+## Convencoes adotadas
 
-- Cálculos internos sempre em **SI (metros)**; a conversão de unidade é explícita e registrada.
-- O calado `T` é medido a partir da **primeira linha d'água da tabela** (`z_base`). Se ela
-  não estiver em `z = 0`, o aplicativo avisa.
-- `I_l` é calculado em relação ao **eixo transversal que passa pelo LCF** (teorema dos
-  eixos paralelos), que é a definição correta para `BM_l`. Há a opção pela meia-nau apenas
-  para comparação.
-- A origem longitudinal de apresentação de LCB e LCF é escolhida pelo usuário
-  (como no arquivo, perpendicular de ré ou meia-nau); o cálculo interno usa sempre o `x`
-  da tabela.
-- Quando não existe coluna X no arquivo, as posições são geradas com
-  `h = LPP / (n_estações − 1)`.
-- **WSA** pelo método do semi-perímetro molhado: `s_i = y(z_base) + Σ √(Δy² + Δz²)` e
-  `WSA = 2 ∫ s dx`. Não inclui popa espelhada, apêndices, leme nem hélice.
-- **ERRO** impede o cálculo; **AVISO** permite continuar mediante confirmação explícita,
-  que fica registrada no histórico.
+- Calculos internos sempre em metros; a conversao de unidade e explicita e registrada.
+- O calado `T` e medido a partir da primeira linha d'agua da tabela.
+- `I_l` em relacao ao eixo transversal que passa pelo LCF (teorema dos eixos paralelos),
+  que e a definicao correta para `BM_l`.
+- A origem longitudinal de apresentacao de LCB e LCF e escolhida na etapa 1; o calculo
+  interno usa sempre o `x` do arquivo.
+- Sem coluna X no arquivo, as posicoes vem de `h = LPP / (n_balizas - 1)`.
+- `WSA` pelo semi-perimetro molhado: `s_i = y(z_base) + soma de raiz(dy^2 + dz^2)`,
+  `WSA = 2 * integral de s dx`. Nao inclui popa espelhada, apendices, leme nem helice.
 
-## 8. Validação
+## Validacao
 
-**Validação 1 — solução analítica.** Barcaça 40 × 10 × 5 m, T = 2 m:
-`∇ = LBT`, `KB = T/2`, `LCB = LCF = L/2`, `A_WP = LB`, `BM_t = B²/12T`,
-`C_B = C_WP = C_M = C_P = 1`, `WSA = LB + 2LT`.
-Erro máximo obtido: **2,8 × 10⁻¹⁴ %**.
+`testes_nucleo.py` compara o aplicativo com **duas solucoes analiticas exatas**:
 
-Um segundo casco analítico (prisma triangular) confirma `KB = 2T/3`, `C_M = 0,5`
-e o valor exato de `I_t`.
+- barcaca paralelepipedica 40 x 10 x 5 m, T = 2 m: `Vol = LBT`, `KB = T/2`,
+  `LCB = LCF = L/2`, `A_WP = LB`, `BM_t = B^2/12T`, `C_B = C_WP = C_M = C_P = 1`,
+  `WSA = LB + 2LT`. Erro maximo obtido: **2,8e-14 %**.
+- prisma triangular: confirma `KB = 2T/3`, `C_M = 0,5` e o valor exato de `I_t`.
 
-**Validação 2 — consistência interna.** Volume longitudinal × vertical, `KM = KB + BM`,
-`C_B = C_M·C_P`, `Δ = ρ∇` e a contagem de dados interpolados, tudo no Módulo 7.
+Tambem verifica a exatidao das tres regras de integracao, a leitura de sete formatos de
+arquivo e o comportamento das curvas.
 
-**Validação 3 — Maxsurf.** No Módulo 7 informe os valores obtidos no Maxsurf em três
-condições (calado baixo, intermediário e de projeto); o aplicativo calcula os próprios
-valores nos mesmos calados e monta a tabela de erros percentuais.
+Dentro do aplicativo, a etapa 7 traz a consistencia interna (`Vol` pelos dois caminhos,
+`KM = KB + BM`, `C_B = C_M x C_P`, `Delta = rho x Vol`) e a comparacao com um software de
+referencia.
 
-## 9. Limitações conhecidas
+## Limitacoes conhecidas
 
-- A geometria é reconstruída por interpolação linear entre pontos discretos: quanto menos
-  estações e linhas d'água, maior o erro de discretização.
-- As regras de Simpson exigem passo constante; em trechos irregulares o aplicativo usa o
-  Trapézio e isso aparece na auditoria.
-- O volume abaixo da primeira linha d'água e acima da última depende da hipótese escolhida
-  no Módulo 3.
-- O modelo 3D é ilustrativo e **não substitui software de modelagem naval**.
+- A geometria e reconstruida por interpolacao linear entre pontos discretos.
+- Simpson exige passo constante; em trechos irregulares o aplicativo usa o Trapezio e
+  registra isso na auditoria. O mesmo vale para o ultimo trecho quando o calado cai entre
+  duas linhas d'agua.
+- O volume abaixo da primeira linha d'agua e acima da ultima depende da hipotese escolhida.
+- O modelo 3D e ilustrativo e nao substitui software de modelagem naval.

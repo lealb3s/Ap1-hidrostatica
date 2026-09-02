@@ -2,7 +2,7 @@
 """Etapa 1: dados principais da embarcacao e convencoes de calculo."""
 
 import streamlit as st
-from .comum import W, botao_proximo, origem_texto
+from .comum import W, botao_proximo, origem_texto, principais, opcoes
 
 
 def render():
@@ -10,8 +10,8 @@ def render():
     st.caption("Servem para os coeficientes de forma e para o aplicativo perceber quando a "
                "tabela de cotas nao combina com a embarcacao.")
 
-    p = st.session_state.principais
-    opt = st.session_state.opt
+    p = principais()
+    opt = opcoes()
 
     c1, c2, c3 = st.columns(3)
     with c1:

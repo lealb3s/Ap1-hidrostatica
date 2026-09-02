@@ -7,12 +7,13 @@ import streamlit as st
 import matplotlib.pyplot as plt
 
 import hidro as H
-from .comum import W, exige_tabela, botao_proximo, slider_seguro, calado_maximo
+from .comum import (W, exige_tabela, botao_proximo, slider_seguro,
+                    calado_maximo, principais)
 
 
 def _achados():
     tab = st.session_state.tab
-    achados = H.diagnosticar(tab, st.session_state.principais)
+    achados = H.diagnosticar(tab, principais())
     st.session_state.achados = achados
 
     erros = [a for a in achados if a.nivel == "ERRO"]

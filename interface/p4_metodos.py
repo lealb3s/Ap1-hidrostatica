@@ -6,7 +6,8 @@ import pandas as pd
 import streamlit as st
 
 import hidro as H
-from .comum import W, exige_completa, botao_proximo, calado_maximo, numero_seguro
+from .comum import (W, exige_completa, botao_proximo, calado_maximo,
+                    numero_seguro, opcoes)
 
 
 def render():
@@ -14,7 +15,7 @@ def render():
     if not exige_completa():
         return
     tab = st.session_state.tab
-    opt = st.session_state.opt
+    opt = opcoes()
 
     st.caption("As tres regras estao implementadas diretamente no codigo, sem biblioteca "
                "pronta. Veja o arquivo hidro/integracao.py.")
@@ -26,17 +27,17 @@ def render():
     c3.latex(r"\frac{3h}{8}(f_0+3f_1+3f_2+f_3)")
     c3.caption("Simpson 3/8 - multiplo de tres")
 
-    opcoes = ["auto", "simpson13", "simpson38", "trapezio"]
+    metodos = ["auto", "simpson13", "simpson38", "trapezio"]
     nomes = {"auto": "Automatico (combina as regras)", "simpson13": "So Simpson 1/3",
              "simpson38": "So Simpson 3/8", "trapezio": "So Trapezio"}
     c1, c2 = st.columns(2)
     with c1:
-        opt["metodo_x"] = st.selectbox("Eixo x (ao longo do comprimento)", opcoes,
-                                       index=opcoes.index(opt.get("metodo_x", "auto")),
+        opt["metodo_x"] = st.selectbox("Eixo x (ao longo do comprimento)", metodos,
+                                       index=metodos.index(opt.get("metodo_x", "auto")),
                                        format_func=lambda k: nomes[k])
     with c2:
-        opt["metodo_z"] = st.selectbox("Eixo z (ao longo do calado)", opcoes,
-                                       index=opcoes.index(opt.get("metodo_z", "auto")),
+        opt["metodo_z"] = st.selectbox("Eixo z (ao longo do calado)", metodos,
+                                       index=metodos.index(opt.get("metodo_z", "auto")),
                                        format_func=lambda k: nomes[k])
 
     if opt["metodo_x"] != "auto" or opt["metodo_z"] != "auto":

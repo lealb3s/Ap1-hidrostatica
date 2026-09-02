@@ -42,7 +42,8 @@ PADRAO = {
     "principais": {"nome": "", "LPP": 0.0, "B": 0.0, "D": 0.0, "Td": 0.0},
     "opt": {"rho": 1.025, "metodo_x": "auto", "metodo_z": "auto",
             "volume_adotado": "longitudinal", "eixo_IL": "LCF",
-            "origem_x": "tabela", "L_ref": "LPP", "B_ref": "BWL"},
+            "origem_x": "tabela", "L_ref": "LPP", "B_ref": "BWL",
+            "sub_vertical": 4},
     "T_sel": 1.0,
 }
 

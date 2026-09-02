@@ -33,7 +33,6 @@ def W(esticar: bool = True) -> dict:
 PADRAO = {
     "hist": [],
     "uploader_id": 0,
-    "pagina": "Inicio",
     "abas": None, "aba_sel": None, "grade": None, "deteccao": None,
     "transposta": False, "arquivo_nome": None,
     "tab_original": None, "tab": None, "tab_arquivo_df": None,
@@ -64,16 +63,28 @@ def rerodar():
 def reiniciar_tudo():
     uid = st.session_state.get("uploader_id", 0) + 1
     for k in list(st.session_state.keys()):
+        if k == "pagina":          # chave do radio: so pode mudar antes do widget
+            continue
         del st.session_state[k]
     iniciar_estado()
-    st.session_state.uploader_id = uid
+    st.session_state["uploader_id"] = uid
+    st.session_state["_ir_para"] = "Inicio"
     H.registrar("Sistema", "Aplicativo reiniciado. Dados, decisoes e resultados anteriores "
                            "foram descartados.", nivel="DECISAO", autor="usuario",
                 consequencia="Uma nova tabela de cotas pode ser carregada do zero.")
 
 
 def ir_para(pagina: str):
-    st.session_state.pagina = pagina
+    """
+    Leva o usuario a outra etapa.
+
+    O destino nao pode ser escrito direto em st.session_state["pagina"]: essa e a
+    chave do radio da barra lateral, e o Streamlit proibe alterar a chave de um
+    widget depois que ele ja foi criado na mesma execucao. Entao o destino fica
+    numa chave comum e a barra lateral o aplica no comeco da execucao seguinte,
+    antes de montar o radio.
+    """
+    st.session_state["_ir_para"] = pagina
     rerodar()
 
 
@@ -174,6 +185,13 @@ def origem_texto(opt) -> str:
 
 
 def barra_lateral() -> str:
+    # aplica a navegacao pedida na execucao anterior, antes de criar o radio
+    destino = st.session_state.pop("_ir_para", None)
+    if destino in PAGINAS:
+        st.session_state["pagina"] = destino
+    if "pagina" not in st.session_state:
+        st.session_state["pagina"] = "Inicio"
+
     with st.sidebar:
         st.markdown("### Calculo Hidrostatico")
         st.caption("AP1.1 - Projeto Integrador")

@@ -10,6 +10,21 @@ from .comum import W, exige_tabela, origem_texto, principais, opcoes
 from .p5_calado import resumo_df
 
 
+def _pdf_bytes() -> bytes:
+    """Gera o PDF uma unica vez e guarda o resultado."""
+    if st.session_state.get("relatorio_pdf") is None:
+        ctx = st.session_state.get("relatorio_ctx")
+        if ctx is None:
+            return b""
+        try:
+            st.session_state["relatorio_pdf"] = H.gerar_relatorio_pdf(ctx)
+        except Exception as e:
+            st.error(f"Nao foi possivel montar o PDF: {e}. O relatorio em HTML continua "
+                     "disponivel e pode ser salvo como PDF pelo navegador.")
+            st.session_state["relatorio_pdf"] = b""
+    return st.session_state["relatorio_pdf"]
+
+
 def render():
     st.title("Relatorio final")
     st.caption("Dados, interpretacao da tabela, problemas detectados, decisoes tomadas, "
@@ -99,26 +114,41 @@ def render():
                 ctx["img_combinado"] = st.session_state.get("img_combinado") or \
                     H.fig_para_b64(H.plot_diagrama_combinado(st.session_state.df_ht))
 
+            tabela_calados = None
+            if st.session_state.get("ht_params"):
+                Tmin, Tmax, dTp = st.session_state["ht_params"]
+                n = int(np.floor((Tmax - Tmin) / dTp + 1e-9)) + 1 if dTp > 0 else 0
+                if n > 0:
+                    tabela_calados = H.auditoria_por_calado(
+                        tab, [Tmin + k * dTp for k in range(n)],
+                        opt["metodo_x"], opt["metodo_z"])
+            ctx["df_aud_calado"] = tabela_calados
             st.session_state["relatorio_html"] = H.gerar_relatorio(ctx)
+            st.session_state["relatorio_ctx"] = ctx
+            st.session_state["relatorio_pdf"] = None
             H.registrar("Relatorio", "Relatorio completo gerado.", autor="usuario")
         st.success("Relatorio gerado.")
 
     html = st.session_state.get("relatorio_html")
     if html:
         nome = (principais().get("nome") or "embarcacao").replace(" ", "_")
-        c1, c2 = st.columns(2)
-        c1.download_button("Baixar o relatorio (.html)", html.encode("utf-8"),
-                           f"relatorio_hidrostatico_{nome}.html", "text/html",
-                           type="primary", **W())
+        c1, c2, c3 = st.columns(3)
+        pdf = _pdf_bytes()
+        if pdf:
+            c1.download_button("Baixar em PDF", pdf,
+                               f"relatorio_hidrostatico_{nome}.pdf", "application/pdf",
+                               type="primary", **W())
+        c2.download_button("Baixar o relatorio (.html)", html.encode("utf-8"),
+                           f"relatorio_hidrostatico_{nome}.html", "text/html", **W())
         if st.session_state.df_ht is not None:
             xls = H.excel_hydrostatic_table(st.session_state.df_ht, tab,
                                             principais(), H.historico_df(),
                                             pd.DataFrame(st.session_state.interp_regs))
-            c2.download_button("Baixar a Hydrostatic Table (.xlsx)", xls,
+            c3.download_button("Baixar a Hydrostatic Table (.xlsx)", xls,
                                "hydrostatic_table.xlsx",
                                "application/vnd.openxmlformats-officedocument."
                                "spreadsheetml.sheet", **W())
-        st.caption("O arquivo .html abre em qualquer navegador com os graficos embutidos. "
-                   "Para PDF, abra e use Imprimir e depois Salvar como PDF.")
+        st.caption("O PDF ja vem paginado e pronto para imprimir ou anexar. O .html abre "
+                   "em qualquer navegador, com as tabelas completas.")
         with st.expander("Pre-visualizar"):
             st.components.v1.html(html, height=700, scrolling=True)

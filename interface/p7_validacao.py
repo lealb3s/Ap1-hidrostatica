@@ -6,7 +6,8 @@ import pandas as pd
 import streamlit as st
 
 import hidro as H
-from .comum import W, exige_completa, botao_proximo, calado_maximo
+from .comum import (W, exige_completa, botao_proximo, calado_maximo,
+                    opcoes, principais)
 
 
 def render():
@@ -43,13 +44,13 @@ def render():
         if not exige_completa():
             return
         tab = st.session_state.tab
-        opt = st.session_state.opt
+        opt = opcoes()
         Tmax_d = calado_maximo()
         props = ["VOL", "DESL", "LCB", "LCF", "KB", "BMT", "KMT", "AWP", "CB"]
         base = pd.DataFrame({
             "Condicao": ["1 - calado baixo", "2 - intermediario", "3 - de projeto"],
             "T (m)": [round(Tmax_d * 0.3, 3), round(Tmax_d * 0.6, 3),
-                      round(float(st.session_state.principais.get("Td") or Tmax_d * 0.9), 3)]})
+                      round(float(principais().get("Td") or Tmax_d * 0.9), 3)]})
         for k in props:
             base[H.PROPRIEDADES[k][0]] = 0.0
         ent = st.data_editor(base, num_rows="fixed", key="editor_ref", **W())

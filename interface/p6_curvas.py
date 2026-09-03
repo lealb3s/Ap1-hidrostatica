@@ -13,7 +13,7 @@ from .comum import (W, exige_completa, botao_proximo, calado_maximo,
 
 
 def _coluna_T(df):
-    return [c for c in df.columns if c.startswith("T moldado")][0]
+    return H.coluna_calado(df)
 
 
 def _calcular():
@@ -141,6 +141,17 @@ def render():
         return
     tab = st.session_state.tab
     opt = opcoes()
+
+    # uma tabela guardada por uma versao anterior do programa pode nao ter as
+    # mesmas colunas. Nesse caso ela e descartada e o usuario e avisado, em vez
+    # de a tela quebrar ao procurar a coluna do calado.
+    if st.session_state.df_ht is not None and _coluna_T(st.session_state.df_ht) is None:
+        st.session_state.df_ht = None
+        st.session_state.brutos_ht = None
+        st.session_state["ht_assinatura"] = None
+        st.warning("A Hydrostatic Table que estava guardada foi gerada por uma versao "
+                   "anterior do aplicativo e nao pode mais ser lida. Clique em "
+                   "**Calcular a Hydrostatic Table** para refaze-la.")
 
     # a tabela guardada pode ter sido calculada com outras convencoes
     antiga = st.session_state.get("ht_assinatura")

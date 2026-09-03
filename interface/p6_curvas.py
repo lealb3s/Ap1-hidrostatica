@@ -8,7 +8,8 @@ import matplotlib.pyplot as plt
 
 import hidro as H
 from .comum import (W, exige_completa, botao_proximo, calado_maximo,
-                    numero_seguro, slider_seguro, rerodar, opcoes, principais)
+                    numero_seguro, slider_seguro, rerodar, opcoes, principais,
+                    assinatura_calculo, CHAVES_RESULTADO)
 
 
 def _coluna_T(df):
@@ -59,6 +60,7 @@ def _calcular():
         st.session_state.df_ht = df_ht
         st.session_state.brutos_ht = brutos
         st.session_state["ht_params"] = (Tmin, Tmax, dT)
+        st.session_state["ht_assinatura"] = assinatura_calculo(opt)
         H.registrar("Etapa 6", f"Hydrostatic Table calculada para {len(df_ht)} calados "
                                f"({H.fmt(Tmin)} a {H.fmt(Tmax)} m, passo {H.fmt(dT)} m).",
                     autor="usuario")
@@ -139,6 +141,26 @@ def render():
         return
     tab = st.session_state.tab
     opt = opcoes()
+
+    # a tabela guardada pode ter sido calculada com outras convencoes
+    antiga = st.session_state.get("ht_assinatura")
+    if st.session_state.df_ht is not None and antiga is not None:
+        atual = assinatura_calculo(opt)
+        mudou = [k for k in CHAVES_RESULTADO if antiga.get(k) != atual.get(k)]
+        if mudou:
+            nomes = {"rho": "densidade", "metodo_x": "integracao em x",
+                     "metodo_z": "integracao em z", "volume_adotado": "volume adotado",
+                     "eixo_IL": "eixo de I_l", "origem_x": "referencia de LCB e LCF",
+                     "L_ref": "comprimento dos coeficientes",
+                     "B_ref": "boca dos coeficientes",
+                     "sub_vertical": "malha vertical",
+                     "espessura_quilha": "espessura da quilha",
+                     "LPP": "LPP", "B": "boca B"}
+            st.warning(
+                "A Hydrostatic Table mostrada abaixo foi calculada ANTES de voce mudar: "
+                + ", ".join(nomes.get(k, k) for k in mudou) +
+                ". As curvas continuam mostrando os valores antigos ate voce clicar em "
+                "**Calcular a Hydrostatic Table** de novo.")
 
     a1, a2, a3, a4 = st.tabs(["Hydrostatic Table", "Curvas", "Diagrama combinado",
                               "Consultar um calado"])

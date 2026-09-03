@@ -74,6 +74,29 @@ def _mostrar_calculo(chave, r, tab, opt, T):
             f"BM_t = **{H.fmt(r['BMT'], 4)} m**  |  KM_t = **{H.fmt(r['KMT'], 4)} m**  |  "
             f"BM_l = **{H.fmt(r['BML'], 4)} m**  |  KM_l = **{H.fmt(r['KML'], 4)} m**")
 
+    elif chave in ("KG", "GMT", "GML", "MTC"):
+        st.markdown("**Dados usados:** KM calculado a partir do casco e KG informado "
+                    "por voce na etapa 1.")
+        st.latex(r"GM_t=KM_t-KG\qquad GM_l=KM_l-KG\qquad "
+                 r"MTC=\frac{\Delta\,GM_l}{100\,L}")
+        if not np.isfinite(r.get("KG", np.nan)):
+            st.warning("O KG nao foi informado na etapa 1, entao GM_t, GM_l e MTC nao "
+                       "podem ser calculados. KG depende da distribuicao de pesos a "
+                       "bordo e nao esta na tabela de cotas.")
+        else:
+            st.markdown(
+                f"KM_t = {H.fmt(r['KMT'], 4)} m &nbsp; KM_l = {H.fmt(r['KML'], 4)} m "
+                f"&nbsp; KG = {H.fmt(r['KG'], 4)} m &nbsp; Delta = {H.fmt(r['DESL'])} t "
+                f"&nbsp; L = {H.fmt(r['L_usado'])} m\n\n"
+                f"GM_t = {H.fmt(r['KMT'], 4)} - {H.fmt(r['KG'], 4)} = "
+                f"**{H.fmt(r['GMT'], 4)} m**\n\n"
+                f"GM_l = {H.fmt(r['KML'], 4)} - {H.fmt(r['KG'], 4)} = "
+                f"**{H.fmt(r['GML'], 4)} m**\n\n"
+                f"MTC = ({H.fmt(r['DESL'])} x {H.fmt(r['GML'], 4)}) / (100 x "
+                f"{H.fmt(r['L_usado'])}) = **{H.fmt(r['MTC'], 4)} t.m/cm**")
+            st.caption("MTC e o momento necessario para alterar o trim em um "
+                       "centimetro. Como depende do GM_l, tambem depende do KG.")
+
     elif chave == "DESL":
         st.latex(r"\Delta=\rho\nabla")
         st.markdown(f"Delta = {H.fmt(r['rho'], 4)} x {H.fmt(r['VOL'])} = "
@@ -147,6 +170,28 @@ def render():
         v = H.converter_origem(r[k], tab, opt["origem_x"]) if k in ("LCB", "LCF") else r[k]
         col.metric(f"{rot} [{uni}]", H.fmt(v, casas))
     st.caption(f"LCB e LCF apresentados com {origem_texto(opt)}.")
+
+    if np.isfinite(r.get("GMT", np.nan)):
+        c = st.columns(4)
+        c[0].metric("KG informado [m]", H.fmt(r["KG"], 4))
+        c[1].metric("GM_t [m]", H.fmt(r["GMT"], 4))
+        c[2].metric("GM_l [m]", H.fmt(r["GML"], 4))
+        c[3].metric("MTC [t.m/cm]", H.fmt(r["MTC"], 4))
+        if r["GMT"] > 0.15:
+            st.success(f"GM_t = KM_t - KG = {H.fmt(r['KMT'], 4)} - {H.fmt(r['KG'], 4)} = "
+                       f"**{H.fmt(r['GMT'], 4)} m**, positivo: nesta condicao a "
+                       "embarcacao tem estabilidade inicial. O valor minimo aceitavel "
+                       "depende da norma aplicavel ao tipo de embarcacao.")
+        elif r["GMT"] > 0:
+            st.warning(f"GM_t = {H.fmt(r['GMT'], 4)} m. Positivo, porem pequeno: a "
+                       "embarcacao volta ao prumo devagar e fica sensivel a pequenas "
+                       "mudancas de carregamento.")
+        else:
+            st.error(f"GM_t = {H.fmt(r['GMT'], 4)} m, negativo ou nulo. Nesta condicao a "
+                     "embarcacao nao tem estabilidade inicial: ela adernaria ate "
+                     "encontrar equilibrio em algum angulo. Confira o KG informado.")
+        st.caption("GM_t e GM_l dependem do KG, que e dado de entrada. O casco define "
+                   "ate o KM; o resto vem do carregamento.")
 
     a1, a2, a3, a4 = st.tabs(["Todas as propriedades", "Conferencia do volume",
                               "Areas seccionais", "Mostrar calculo"])

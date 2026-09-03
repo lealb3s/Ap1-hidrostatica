@@ -271,7 +271,13 @@ def hidrostatica(tab: Tabela, T: float, opt: dict) -> dict:
     CM = AM / (B * T) if B and T > EPS else np.nan
     CP = VOL / (AM * L) if AM and L and abs(AM) > EPS else np.nan
 
-    r = {"T": T, "nivel": z_base(tab) + T,
+    # Referencia vertical (item 5 do enunciado). O calado MOLDADO e medido a partir
+    # da linha de base da tabela de cotas; o EXTREMO inclui a espessura da chapa de
+    # quilha. As tabelas hidrostaticas de estaleiro trazem os dois, e comparar o
+    # numero errado com o Maxsurf produz uma diferenca que nao existe.
+    quilha = float(opt.get("espessura_quilha", 0.0) or 0.0)
+
+    r = {"T": T, "T_EXT": T + quilha, "quilha": quilha, "nivel": z_base(tab) + T,
          "VOL_L": v["VOL_L"], "VOL_V": v["VOL_V"], "VOL": VOL, "E_VOL": v["E_VOL"],
          "DESL": DESL, "LCB": LCB, "LCF": LCF, "KB": KB,
          "BMT": BMT, "KMT": KMT, "BML": BML, "KML": KML,
@@ -332,7 +338,9 @@ def tabela_hidrostatica(tab: Tabela, Tmin, Tmax, dT, opt: dict, barra=None):
 
 def consultar_curva(df: pd.DataFrame, T_consulta: float) -> dict:
     """Interpola numericamente um ponto qualquer das curvas hidrostaticas."""
-    colT = [c for c in df.columns if c.startswith("T (calado)")][0]
+    colT = coluna_calado(df)
+    if colT is None:
+        raise ValueError("A tabela nao tem coluna de calado: refaca a Hydrostatic Table.")
     Ts = df[colT].to_numpy(float)
     saida = {"T [m]": T_consulta}
     for c in df.columns:

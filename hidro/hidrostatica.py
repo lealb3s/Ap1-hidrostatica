@@ -147,8 +147,22 @@ def plano_dagua(tab: Tabela, T: float, metodo="auto", eixo_IL="LCF"):
     _, aud = integrar(x, y, metodo, "estacoes")
 
     largura = 2.0 * float(np.max(y)) if len(y) else np.nan
+
+    # Comprimento na linha d'agua: vai da primeira ate a ultima baliza molhada e,
+    # como o casco se fecha entre balizas, se estende ate a baliza seca vizinha,
+    # que e onde a meia-boca chega a zero no modelo linear.
+    #
+    # Cuidado ao usar L_WL nos coeficientes: ele so pode mudar em degraus do
+    # espacamento das balizas, entao C_B e C_P calculados com ele saem serrilhados.
+    # Para um casco com bulbo ou popa de espelho ele ainda pode diminuir quando o
+    # calado sobe, porque a baliza extrema deixa de estar molhada.
     molhados = np.where(y > 1e-9)[0]
-    LWL = float(x[molhados[-1]] - x[molhados[0]]) if len(molhados) >= 2 else float(x[-1] - x[0])
+    if len(molhados) >= 2:
+        i0 = max(int(molhados[0]) - 1, 0)
+        i1 = min(int(molhados[-1]) + 1, len(x) - 1)
+        LWL = float(x[i1] - x[i0])
+    else:
+        LWL = float(x[-1] - x[0])
 
     return {"AWP": AWP, "LCF": LCF, "IT": IT, "IL": IL, "IL0": IL0, "Mx": Mx,
             "y": y, "df": df, "aud": aud, "eixo_IL": eixo_txt,

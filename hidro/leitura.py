@@ -548,7 +548,15 @@ PISTAS = {
     "espacamento_estacoes": [["espacamento", "secao"], ["espacamento", "secoes"],
                              ["espacamento", "baliza"], ["espacamento", "estacao"],
                              ["intervalo", "baliza"]],
-    "comprimento": [["comprimento", "total"], ["comprimento"], ["loa"], ["lpp"], ["lbp"]],
+    # LPP e LOA sao grandezas DIFERENTES e precisam de chaves separadas. Tratar as
+    # duas como "comprimento" fazia o aplicativo preencher o LPP com o comprimento
+    # total, e os coeficientes de forma saiam todos subestimados: no VLCC, usar
+    # 332,8 m no lugar de 320,0 m reduz o C_B em cerca de 4 %.
+    "lpp": [["lpp"], ["lbp"], ["entre perpendiculares"], ["perpendiculares"],
+            ["l.p.p"], ["l.b.p"]],
+    "loa": [["loa"], ["l.o.a"], ["comprimento", "total"], ["comprimento", "fora"],
+            ["comprimento", "maximo"]],
+    "comprimento": [["comprimento"], ["length"]],
     "boca": [["boca"], ["breadth"], ["beam"]],
     "pontal": [["pontal"], ["depth"]],
     "calado": [["calado"], ["draft"], ["draught"]],

@@ -172,22 +172,47 @@ def _importar():
             st.caption(f"- {n}")
 
         pistas = H.pistas_cabecalho(gu)
-        uteis = {k: v for k, v in pistas.items()
-                 if k in ("comprimento", "boca", "pontal", "calado")}
+        NOMES = {"lpp": "LPP - entre perpendiculares", "loa": "LOA - comprimento total",
+                 "comprimento": "comprimento (tipo nao identificado)",
+                 "boca": "boca B", "pontal": "pontal D", "calado": "calado de projeto Td"}
+        uteis = {k: v for k, v in pistas.items() if k in NOMES}
         if uteis:
             with st.expander("O arquivo tambem traz os dados principais do navio"):
                 st.dataframe(pd.DataFrame(
-                    [{"Grandeza": k, "Rotulo na planilha": onde, "Valor": v}
+                    [{"Grandeza": NOMES[k], "Rotulo na planilha": onde, "Valor": v}
                      for k, (v, onde) in uteis.items()]), hide_index=True, **W())
+
+                # o LPP e o que entra nos coeficientes; o LOA NAO serve para isso
+                if "lpp" in uteis:
+                    origem_lpp = ("lpp", "o proprio LPP encontrado na planilha")
+                elif "comprimento" in uteis:
+                    origem_lpp = ("comprimento", "um comprimento generico da planilha")
+                elif "loa" in uteis:
+                    origem_lpp = ("loa", "o COMPRIMENTO TOTAL, que nao e o LPP")
+                else:
+                    origem_lpp = (None, "")
+
+                if origem_lpp[0] == "lpp":
+                    st.caption(f"O LPP sera preenchido com {H.fmt(uteis['lpp'][0])} m.")
+                elif origem_lpp[0] is not None:
+                    st.warning(
+                        f"A planilha nao traz o LPP explicitamente. O campo seria "
+                        f"preenchido com {H.fmt(uteis[origem_lpp[0]][0])} m, que e "
+                        f"{origem_lpp[1]}. O LPP costuma ser menor que o comprimento "
+                        "total, e usar o valor errado reduz C_B, C_P e C_WP na mesma "
+                        "proporcao. Confira na etapa 1 antes de calcular.")
+
                 if st.button("Preencher a etapa 1 com estes valores"):
                     p = principais()
-                    mapa = {"comprimento": "LPP", "boca": "B",
-                            "pontal": "D", "calado": "Td"}
-                    for k, destino in mapa.items():
+                    for k, destino in {"boca": "B", "pontal": "D", "calado": "Td"}.items():
                         if k in uteis:
                             p[destino] = float(uteis[k][0])
+                    if origem_lpp[0] is not None:
+                        p["LPP"] = float(uteis[origem_lpp[0]][0])
                     H.registrar("Etapa 2", "Dados principais preenchidos a partir do "
-                                           "cabecalho da planilha.", autor="usuario")
+                                           "cabecalho da planilha.", autor="usuario",
+                                novo=f"LPP = {H.fmt(p.get('LPP'))} m ({origem_lpp[1]})",
+                                consequencia="O LPP entra em C_B, C_P e C_WP.")
                     st.success("Dados do navio preenchidos. Confira na etapa 1.")
                     rerodar()
 

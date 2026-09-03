@@ -16,8 +16,20 @@ def _pdf_bytes() -> bytes:
         ctx = st.session_state.get("relatorio_ctx")
         if ctx is None:
             return b""
+        if not hasattr(H, "gerar_relatorio_pdf"):
+            st.error("O modulo `hidro/pdf.py` nao esta no projeto, entao o relatorio em "
+                     "PDF nao pode ser montado. Envie esse arquivo para a pasta **hidro** "
+                     "do repositorio. Enquanto isso, use o relatorio em HTML: ele abre no "
+                     "navegador e pode ser salvo como PDF por Imprimir.")
+            st.session_state["relatorio_pdf"] = b""
+            return b""
         try:
             st.session_state["relatorio_pdf"] = H.gerar_relatorio_pdf(ctx)
+        except ImportError:
+            st.error("A biblioteca `reportlab` nao esta instalada. Acrescente "
+                     "`reportlab>=4.0` ao requirements.txt e reinicie o aplicativo. "
+                     "O relatorio em HTML continua disponivel.")
+            st.session_state["relatorio_pdf"] = b""
         except Exception as e:
             st.error(f"Nao foi possivel montar o PDF: {e}. O relatorio em HTML continua "
                      "disponivel e pode ser salvo como PDF pelo navegador.")

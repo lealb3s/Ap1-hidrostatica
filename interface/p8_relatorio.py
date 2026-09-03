@@ -33,6 +33,11 @@ def render():
     if not exige_tabela():
         return
 
+    if st.session_state.df_ht is not None and H.coluna_calado(st.session_state.df_ht) is None:
+        st.session_state.df_ht = None
+        st.warning("A Hydrostatic Table guardada era de uma versao anterior e foi "
+                   "descartada. Refaca o calculo na etapa 6 para inclui-la no relatorio.")
+
     tab = st.session_state.tab
     opt = opcoes()
     completa = bool(np.isfinite(tab.Y).all())

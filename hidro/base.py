@@ -63,7 +63,8 @@ NULOS = {"", "-", "--", "---", "n/a", "na", "nan", "none", "null", "#n/d", "#n/a
 
 # Propriedades hidrostaticas: chave -> (rotulo, unidade, casas decimais)
 PROPRIEDADES = {
-    "T":      ("T (calado)",                 "m",    3),
+    "T":      ("T moldado",                  "m",    3),
+    "T_EXT":  ("T extremo",                  "m",    3),
     "VOL_L":  ("Vol L (long.)",              "m3",   3),
     "VOL_V":  ("Vol V (vert.)",              "m3",   3),
     "VOL":    ("Vol (adotado)",              "m3",   3),
@@ -294,3 +295,23 @@ class Achado:
         return {"Codigo": self.codigo, "Nivel": self.nivel, "Problema": self.titulo,
                 "Onde": self.onde, "O que foi encontrado": self.explicacao,
                 "Possiveis consequencias": self.consequencia, "Sugestao": self.sugestao}
+
+
+def coluna_calado(df) -> str | None:
+    """
+    Nome da coluna de calado numa Hydrostatic Table, ou None se nao houver.
+
+    Aceita tambem o rotulo antigo "T (calado)": uma tabela guardada na sessao do
+    navegador pode ter sido calculada por uma versao anterior do programa, e nesse
+    caso o certo e pedir um novo calculo, nunca quebrar a tela.
+    """
+    if df is None or not hasattr(df, "columns"):
+        return None
+    for prefixo in ("T moldado", "T (calado)"):
+        for c in df.columns:
+            if str(c).startswith(prefixo):
+                return c
+    for c in df.columns:                      # ultimo recurso: qualquer coluna "T ..."
+        if str(c).startswith("T "):
+            return c
+    return None

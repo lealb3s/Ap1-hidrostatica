@@ -28,6 +28,13 @@ def render():
         p["Td"] = st.number_input("Td - calado de projeto (m)",
                                   value=float(p.get("Td", 0.0)), min_value=0.0,
                                   step=0.1, format="%.4f")
+        opt["KG"] = st.number_input(
+            "KG - altura do centro de gravidade (m)",
+            value=float(opt.get("KG", 0.0) or 0.0), min_value=0.0, step=0.01,
+            format="%.4f",
+            help="Deixe zero se ainda nao souber. KG depende da distribuicao de pesos "
+                 "a bordo e NAO pode ser obtido da tabela de cotas: e um dado de "
+                 "entrada. Informando-o, o aplicativo calcula GM_t, GM_l e MTC.")
         opt["espessura_quilha"] = st.number_input(
             "Espessura da chapa de quilha (m)",
             value=float(opt.get("espessura_quilha", 0.0)), min_value=0.0,
@@ -40,6 +47,12 @@ def render():
             min_value=0.100, max_value=2.000, step=0.001, format="%.4f",
             help="Agua salgada cerca de 1,025 | agua doce 1,000. "
                  "E um dado de entrada: muda o deslocamento e o TPC, nao o volume.")
+
+    if not (opt.get("KG") or 0):
+        st.info("Sem o KG o aplicativo calcula tudo, menos GM_t, GM_l e MTC. Essas tres "
+                "grandezas dependem de onde estao os pesos a bordo, e nenhuma tabela de "
+                "cotas contem essa informacao. O casco define ate o KM; o GM so aparece "
+                "depois que o carregamento e conhecido.")
 
     with st.expander("Convencoes de calculo (padroes ja adequados na maioria dos casos)"):
         c1, c2 = st.columns(2)

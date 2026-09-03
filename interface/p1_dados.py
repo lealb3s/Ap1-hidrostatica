@@ -51,6 +51,13 @@ def render():
                 index=0 if opt.get("L_ref") == "LPP" else 1,
                 format_func=lambda k: {"LPP": "LPP informado acima",
                                        "LWL": "comprimento na linha d'agua"}[k])
+            if opt["L_ref"] == "LWL":
+                st.warning(
+                    "O comprimento na linha d'agua e medido entre as balizas molhadas, "
+                    "entao so muda em degraus do espacamento das balizas. Isso deixa as "
+                    "curvas de C_B e C_P serrilhadas, e em cascos com bulbo ele pode ate "
+                    "diminuir quando o calado sobe, porque a baliza extrema deixa de "
+                    "estar molhada. Para curvas suaves, prefira o LPP.")
         with c2:
             opt["B_ref"] = st.selectbox(
                 "Boca B dos coeficientes", ["BWL", "B"],

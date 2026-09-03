@@ -12,7 +12,7 @@ from .comum import (W, exige_completa, botao_proximo, calado_maximo,
 
 
 def _coluna_T(df):
-    return [c for c in df.columns if c.startswith("T (calado)")][0]
+    return [c for c in df.columns if c.startswith("T moldado")][0]
 
 
 def _calcular():
@@ -66,7 +66,15 @@ def _calcular():
 
 
 def _verificar(df_ht):
-    checagens = []
+    """
+    Confere o comportamento fisico das curvas e tambem a SUAVIDADE delas.
+
+    Uma curva hidrostatica de casco real sobe ou desce sem ziguezaguear. Quando o
+    sentido troca varias vezes, a causa quase nunca e o metodo de integracao: e
+    alguma grandeza do denominador que so muda em degraus, tipicamente o
+    comprimento na linha d'agua.
+    """
+    linhas = []
     for chave, esperado in [("VOL", "crescente"), ("DESL", "crescente"),
                             ("AWP", "nao decrescente"), ("KB", "crescente"),
                             ("TPC", "nao decrescente")]:
@@ -79,9 +87,50 @@ def _verificar(df_ht):
         d = np.diff(v)
         ok = np.all(d > -1e-9) if esperado == "crescente" else \
             np.all(d > -1e-6 * max(np.nanmax(np.abs(v)), 1))
-        checagens.append({"Curva": f"T x {H.PROPRIEDADES[chave][0]}",
-                          "Esperado": esperado, "Situacao": "OK" if ok else "INCOERENTE"})
-    return pd.DataFrame(checagens)
+        linhas.append({"Curva": f"T x {H.PROPRIEDADES[chave][0]}",
+                       "Esperado": esperado, "Situacao": "OK" if ok else "INCOERENTE"})
+
+    for chave in ("CB", "CWP", "CM", "CP"):
+        col = f"{H.PROPRIEDADES[chave][0]} [{H.PROPRIEDADES[chave][1]}]"
+        if col not in df_ht.columns:
+            continue
+        v = df_ht[col].to_numpy(float)
+        if len(v) < 4 or not np.isfinite(v).all():
+            continue
+        d = np.diff(v)
+        trocas = int((np.diff(np.sign(d)) != 0).sum())
+        linhas.append({"Curva": f"T x {H.PROPRIEDADES[chave][0]}",
+                       "Esperado": "sem ziguezague",
+                       "Situacao": "OK" if trocas <= 2 else f"OSCILA ({trocas} trocas)"})
+    return pd.DataFrame(linhas)
+
+
+def _diagnostico_oscilacao(df_ht, opt):
+    """Explica a causa mais provavel de coeficientes serrilhados."""
+    col = f"{H.PROPRIEDADES['LWL'][0]} [{H.PROPRIEDADES['LWL'][1]}]"
+    if col not in df_ht.columns:
+        return ""
+    v = df_ht[col].to_numpy(float)
+    if len(v) < 4 or not np.isfinite(v).all():
+        return ""
+    degraus = int((np.diff(np.sign(np.diff(v))) != 0).sum())
+    if opt.get("L_ref") == "LWL" and degraus > 2:
+        return ("**Causa provavel: o comprimento na linha d'agua.** Voce escolheu L_WL "
+                f"como comprimento dos coeficientes, e ele varia de {H.fmt(v.min())} a "
+                f"{H.fmt(v.max())} m em degraus, trocando de sentido {degraus} vezes ao "
+                "longo da faixa de calados. Isso acontece porque o L_WL e medido entre "
+                "as balizas molhadas e so pode mudar de uma baliza para a outra; num "
+                "casco com bulbo ele ate diminui quando o calado sobe, porque a baliza "
+                "extrema deixa de estar molhada.\n\n"
+                "Como C_B, C_WP e C_P tem o comprimento no denominador, cada degrau "
+                "vira um dente na curva. **Volte a etapa 1 e troque o comprimento dos "
+                "coeficientes para LPP.** Com o LPP as tres curvas sobem sem uma unica "
+                "troca de sentido.")
+    if degraus > 2:
+        return ("O comprimento na linha d'agua varia em degraus nesta faixa de calados, "
+                "o que e normal. Como voce esta usando o LPP nos coeficientes, isso nao "
+                "afeta as curvas.")
+    return ""
 
 
 def render():
@@ -116,12 +165,22 @@ def render():
             dfc = _verificar(df_ht)
             if len(dfc):
                 st.dataframe(dfc, hide_index=True, **W())
-                if (dfc["Situacao"] == "INCOERENTE").any():
+                incoerente = (dfc["Situacao"] == "INCOERENTE").any()
+                oscila = dfc["Situacao"].astype(str).str.startswith("OSCILA").any()
+                if incoerente:
                     st.warning("Alguma curva nao segue o comportamento fisico esperado. "
-                               "Isso aponta problema na tabela de cotas, e nao no metodo de "
-                               "integracao. Reveja a etapa 3 antes de usar estes resultados.")
-                else:
-                    st.success("Todas as curvas verificadas seguem o comportamento esperado.")
+                               "Isso aponta problema na tabela de cotas, e nao no metodo "
+                               "de integracao. Reveja a etapa 3 antes de usar estes "
+                               "resultados.")
+                if oscila:
+                    st.error("Ha curva de coeficiente ziguezagueando. Um coeficiente de "
+                             "forma de casco real varia de modo suave com o calado.")
+                    causa = _diagnostico_oscilacao(df_ht, opt)
+                    if causa:
+                        st.info(causa)
+                if not incoerente and not oscila:
+                    st.success("Todas as curvas verificadas seguem o comportamento "
+                               "esperado e nenhuma ziguezagueia.")
 
     df_ht = st.session_state.df_ht
     faltando = df_ht is None or not len(df_ht)

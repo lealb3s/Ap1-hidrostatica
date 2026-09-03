@@ -83,8 +83,20 @@ def ler_arquivo_bruto(arquivo) -> dict:
         sep = max(candidatos, key=candidatos.get)
         if candidatos[sep] == 0:
             sep = r"\s+"
-        df = pd.read_csv(io.StringIO(texto), sep=sep, header=None,
-                         dtype=object, engine="python", skip_blank_lines=False)
+        # Linhas com larguras diferentes sao comuns: o bloco de dimensoes no topo
+        # tem poucas colunas e a tabela de cotas tem muitas. Sem fixar o numero de
+        # colunas pelo maior caso, o leitor aborta o arquivo inteiro com
+        # "Expected N fields, saw M". Aqui as linhas curtas apenas ficam com
+        # celulas vazias no fim.
+        linhas = texto.splitlines()
+        if sep == r"\s+":
+            n_col = max((len(re.split(r"\s+", l.strip())) for l in linhas if l.strip()),
+                        default=1)
+        else:
+            n_col = max((l.count(sep) + 1 for l in linhas), default=1)
+        df = pd.read_csv(io.StringIO(texto), sep=sep, header=None, dtype=object,
+                         engine="python", skip_blank_lines=False,
+                         names=list(range(max(n_col, 1))))
         abas["(csv)"] = df
     else:
         raise RuntimeError(f"Extensao nao suportada: .{ext}. Use .xlsx, .xls ou .csv.")
@@ -173,7 +185,11 @@ def _linha_de_alturas(g: pd.DataFrame, num: np.ndarray, ate_linha: int):
     Retorna (indice_da_linha, colunas_das_alturas) ou (None, []).
     """
     achado = (None, [])
-    limite = min(max(ate_linha + 1, 1), g.shape[0])
+    # a busca vai ALEM do inicio do bloco de dados: quando os rotulos das linhas
+    # d'agua sao apenas numeros ("6;5;4;3;2;1"), a propria linha de rotulos conta
+    # como linha numerica e o bloco comeca cedo demais. Sem esta folga, a linha
+    # das alturas ficava fora da janela de busca e nunca era encontrada.
+    limite = min(max(ate_linha + 3, 1), g.shape[0])
     for r in range(limite):
         # so aceita celulas que sejam numero de verdade. Um cabecalho como
         # "L.A 00 ... L.A 11" tambem produz numeros, mas e uma NUMERACAO das
@@ -189,11 +205,19 @@ def _linha_de_alturas(g: pd.DataFrame, num: np.ndarray, ate_linha: int):
         bloco = list(cols[k:])
         if len(bloco) < 3:
             continue
-        # a esquerda do bloco nao pode haver numero algum
-        if np.isfinite(num[r, :bloco[0]]).any():
+        # a linha das alturas tem SEMPRE colunas de rotulo a sua esquerda
+        # ("Baliza", "X", ou simplesmente vazias), e nenhum numero nelas. Uma linha
+        # de dados, ao contrario, comeca com o numero da baliza ou a posicao X.
+        # Sem exigir essa folga a esquerda, a primeira linha de dados passa por
+        # linha de alturas sempre que o bloco numerico comeca na coluna 1.
+        if bloco[0] == 0 or np.isfinite(num[r, :bloco[0]]).any():
             continue
         vals = [num[r, c] for c in bloco]
-        if not all(vals[i] < vals[i + 1] - 1e-12 for i in range(len(vals) - 1)):
+        cresce = all(vals[i] < vals[i + 1] - 1e-12 for i in range(len(vals) - 1))
+        decresce = all(vals[i] > vals[i + 1] + 1e-12 for i in range(len(vals) - 1))
+        # alturas em ordem decrescente tambem valem: ha tabelas escritas do convés
+        # para a quilha. A ordem e corrigida depois, com o aval do usuario.
+        if not (cresce or decresce):
             continue
         achado = (r, bloco)
     return achado
@@ -327,8 +351,11 @@ def detectar_layout(g: pd.DataFrame) -> Deteccao:
         d.confianca += 15
 
     if col_x is None and esquerda:                       # 4b) pelo comportamento
+        # a coluna ja reconhecida como rotulo da baliza fica de fora: numa tabela
+        # com "station" e "X" lado a lado, a numeracao das balizas tambem e
+        # monotona e seria escolhida como X, encolhendo o navio inteiro.
         cands = []
-        for c in esquerda:
+        for c in [c for c in esquerda if c != col_id]:
             v = num[r0:r1 + 1, c]
             if np.isfinite(v).mean() < 0.9:
                 continue
@@ -351,6 +378,8 @@ def detectar_layout(g: pd.DataFrame) -> Deteccao:
         for c, monot, indice in cands:
             if indice and c != col_x and col_id is None:
                 col_id = c
+        if col_x is None and col_id is not None and len(esquerda) == 1:
+            col_x, col_id = col_id, None
 
     d.col_x, d.col_id = col_x, col_id
     d.col_y_ini, d.col_y_fim = min(cols_y), max(cols_y)
@@ -432,6 +461,29 @@ def detectar_layout(g: pd.DataFrame) -> Deteccao:
     if sc < 0.4:
         d.notas.append(f"Apenas {sc*100:.0f} % das linhas alargam com o aumento de z. "
                        "Confira a orientacao da tabela e a ordem das linhas d'agua.")
+
+    # --- 9) rotulos e alturas apontam para o mesmo lado? ----------------------
+    if d.lin_z is not None and d.z_valores:
+        zz = np.asarray(d.z_valores, float)
+        if np.all(np.diff(zz) < 0):
+            d.notas.append(
+                "As alturas das linhas d'agua estao em ordem DECRESCENTE: a tabela foi "
+                "escrita do convés para a quilha. Reordene na etapa 2 antes de calcular.")
+        acima = d.lin_z - 1
+        if acima >= 0:
+            rot_num = np.array([para_float(g.iat[acima, c]) for c in faixa], float)
+            if np.all(np.isfinite(rot_num)) and len(rot_num) >= 3:
+                sobe_rot = np.all(np.diff(rot_num) > 0)
+                desce_rot = np.all(np.diff(rot_num) < 0)
+                sobe_z = np.all(np.diff(zz) > 0)
+                if (desce_rot and sobe_z) or (sobe_rot and np.all(np.diff(zz) < 0)):
+                    d.notas.append(
+                        "ATENCAO: a numeracao das linhas d'agua corre em um sentido "
+                        f"({rot_num[0]:g} a {rot_num[-1]:g}) e as alturas correm no "
+                        f"sentido CONTRARIO ({fmt(zz[0], 3)} a {fmt(zz[-1], 3)}). "
+                        "Uma das duas linhas esta na ordem errada no arquivo. Confira "
+                        "qual altura pertence a cada coluna antes de calcular: trocar "
+                        "isso vira o casco de cabeca para baixo.")
 
     if len(faixa) >= 2 and (d.lin_fim - d.lin_ini) >= 1:
         d.ok = True

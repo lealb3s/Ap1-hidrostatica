@@ -277,6 +277,12 @@ def hidrostatica(tab: Tabela, T: float, opt: dict) -> dict:
     # numero errado com o Maxsurf produz uma diferenca que nao existe.
     quilha = float(opt.get("espessura_quilha", 0.0) or 0.0)
 
+    # KG e um DADO DE ENTRADA: depende de onde estao os pesos a bordo, e nenhuma
+    # tabela de cotas contem essa informacao. Sem KG nao existe GM nem MTC, e o
+    # aplicativo devolve esses campos vazios em vez de inventar um valor.
+    KG = opt.get("KG")
+    KG = float(KG) if KG not in (None, "", 0, 0.0) else np.nan
+
     r = {"T": T, "T_EXT": T + quilha, "quilha": quilha, "nivel": z_base(tab) + T,
          "VOL_L": v["VOL_L"], "VOL_V": v["VOL_V"], "VOL": VOL, "E_VOL": v["E_VOL"],
          "DESL": DESL, "LCB": LCB, "LCF": LCF, "KB": KB,
@@ -284,6 +290,8 @@ def hidrostatica(tab: Tabela, T: float, opt: dict) -> dict:
          "AWP": AWP, "IT": IT, "IL": IL, "TPC": TPC, "WSA": WSA,
          "AM": AM, "i_AM": i_am, "BWL": pw["BWL"], "LWL": pw["LWL"],
          "CB": CB, "CWP": CWP, "CM": CM, "CP": CP,
+         "KG": KG, "GMT": KMT - KG, "GML": KML - KG,
+         "MTC": (DESL * (KML - KG)) / (100.0 * L) if (L and np.isfinite(KG)) else np.nan,
          "L_usado": L, "B_usado": B, "rho": rho,
          "_vol": v, "_pw": pw, "_wsa_df": df_wsa}
     return r

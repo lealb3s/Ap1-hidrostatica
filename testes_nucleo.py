@@ -153,7 +153,7 @@ checa("V: WSA = 2*L*lado", perto(rv["WSA"], 2 * Lv * lado, 1e-9), f"{rv['WSA']}"
 # ============================================================================
 print("\n[5] Comportamento das curvas hidrostaticas")
 df_ht, brutos = g["tabela_hidrostatica"](tv, 0.5, 4.0, 0.25, optv)
-colT = [c for c in df_ht.columns if c.startswith("T (calado)")][0]
+colT = [c for c in df_ht.columns if c.startswith("T moldado")][0]
 for chave, nome in [("VOL", "Volume"), ("DESL", "Deslocamento"), ("AWP", "A_WP"),
                     ("KB", "KB"), ("TPC", "TPC")]:
     col = f"{g['PROPRIEDADES'][chave][0]} [{g['PROPRIEDADES'][chave][1]}]"
@@ -465,6 +465,81 @@ checa("Sem subdividir, KB de um unico intervalo da o valor impossivel T",
       perto(kb_sub1, 1.0, 1e-9), f"KB={kb_sub1}")
 checa("Subdividindo, KB do casco em V converge para 2T/3",
       perto(kb_sub8, 2.0 / 3.0, 1e-3), f"KB={kb_sub8}")
+
+
+
+
+# ============================================================================
+print("\n[11] Cabecalhos dificeis")
+
+# rotulos de linha d'agua puramente numericos, com a linha de alturas logo abaixo
+lin = ["WL;;6;5;4;3;2;1", "station;;0.429;0.857;1.286;1.714;2.143;2.571"]
+for i in range(6):
+    lin.append(f"{i};{i*2.8};6000;5999;5998;5996;5993;5944")
+x, z, Y = canonico_de(Falso("num.csv", "\n".join(lin).encode("utf-8")))
+checa("Rotulos de WL numericos nao sao confundidos com a linha de alturas",
+      len(z) == 6 and perto(z[0], 0.429, 1e-9), f"z={list(z)}")
+checa("Coluna de rotulo da baliza nao vira coluna X",
+      len(x) == 6 and perto(x[-1], 14.0, 1e-9), f"x={list(x)}")
+
+# alturas em ordem decrescente (tabela escrita do convés para a quilha)
+lin = ["Baliza;X;WL3;WL2;WL1", ";;3.0;2.0;1.0"]
+for i in range(5):
+    lin.append(f"{i};{i*5};3.0;2.5;2.0")
+x, z, Y = canonico_de(Falso("desc.csv", "\n".join(lin).encode("utf-8")))
+checa("Alturas em ordem decrescente sao lidas", len(z) == 3 and perto(z[0], 3.0, 1e-9),
+      f"z={list(z)}")
+t_desc = g["nova_tabela"](x, z, Y)
+checa("Diagnostico aponta linhas d'agua fora de ordem",
+      "WL-ORD" in [a.codigo for a in g["diagnosticar"](t_desc, {})])
+t_ord = g["ordenar_tabela"](t_desc)
+checa("Ordenar coloca as linhas d'agua em ordem crescente",
+      bool(np.all(np.diff(t_ord.z) > 0)) and perto(t_ord.z[0], 1.0, 1e-9))
+
+# LPP e LOA precisam ser lidos como grandezas diferentes
+lin = ["Comprimento total LOA;332.8;m", "Comprimento entre perpendiculares LBP;320;m",
+       "Boca B;60;m", "", "Baliza;X;WL0;WL1;WL2", ";;0;1;2"]
+for i in range(4):
+    lin.append(f"{i};{i*10};1;2;3")
+import io as _io
+abas = g["ler_arquivo_bruto"](Falso("dim.csv", "\n".join(lin).encode("utf-8")))
+gg = g["limpar_grade"](list(abas.values())[0])
+p = g["pistas_cabecalho"](gg)
+checa("LPP lido do rotulo correto", "lpp" in p and perto(p["lpp"][0], 320.0, 1e-9),
+      str(p.get("lpp")))
+checa("LOA lido separadamente do LPP", "loa" in p and perto(p["loa"][0], 332.8, 1e-9),
+      str(p.get("loa")))
+
+
+
+
+# ============================================================================
+print("\n[12] KG, GM e MTC")
+o_kg = dict(opt)
+o_kg.update({"LPP": L, "B": B, "sub_vertical": 4})
+r_sem = g["hidrostatica"](tab, T, o_kg)
+checa("Sem KG informado, GM_t fica indefinido",
+      not np.isfinite(r_sem["GMT"]) and not np.isfinite(r_sem["MTC"]))
+
+KG_teste = 2.5
+r_kg = g["hidrostatica"](tab, T, {**o_kg, "KG": KG_teste})
+checa("GM_t = KM_t - KG", perto(r_kg["GMT"], r_kg["KMT"] - KG_teste, 1e-12),
+      f"{r_kg['GMT']}")
+checa("GM_l = KM_l - KG", perto(r_kg["GML"], r_kg["KML"] - KG_teste, 1e-12))
+checa("MTC = Delta * GM_l / (100 L)",
+      perto(r_kg["MTC"], r_kg["DESL"] * r_kg["GML"] / (100 * L), 1e-12),
+      f"{r_kg['MTC']}")
+# barcaca: KM_t = T/2 + B^2/(12T) tem solucao fechada
+km_ex = T / 2 + B ** 2 / (12 * T)
+checa("Barcaca: GM_t confere com a solucao analitica",
+      perto(r_kg["GMT"], km_ex - KG_teste, 1e-9),
+      f"{r_kg['GMT']} vs {km_ex - KG_teste}")
+checa("KG informado nao altera nenhuma propriedade do casco",
+      all(perto(r_kg[k], r_sem[k], 1e-12) for k in
+          ("VOL_L", "AWP", "KB", "BMT", "KMT", "LCB", "LCF", "WSA", "CB")))
+df_kg, _ = g["tabela_hidrostatica"](tab, 1.0, 4.0, 1.0, {**o_kg, "KG": KG_teste})
+checa("Coluna de GM_t entra na Hydrostatic Table",
+      "GM_t [m]" in df_kg.columns and np.isfinite(df_kg["GM_t [m]"].to_numpy(float)).all())
 
 
 print("\n" + "=" * 70)

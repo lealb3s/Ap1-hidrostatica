@@ -36,17 +36,29 @@ div[data-testid="stMetricValue"]{font-size:1.3rem}
 # nao diz qual e o problema. Aqui o pacote e remontado na hora, a partir dos
 # proprios modulos, para que isso nunca derrube o aplicativo.
 # ---------------------------------------------------------------------------
+import importlib                                                # noqa: E402
+import pkgutil                                                    # noqa: E402
+
 import hidro as _hidro                                            # noqa: E402
 
-if not hasattr(_hidro, "fmt"):
-    from hidro import (base as _base, leitura as _leitura, tabela as _tabela,
-                       integracao as _integracao, hidrostatica as _hidrostatica,
-                       graficos as _graficos, relatorio as _relatorio)
-    for _mod in (_base, _leitura, _tabela, _integracao, _hidrostatica,
-                 _graficos, _relatorio):
+if not hasattr(_hidro, "fmt") or not hasattr(_hidro, "gerar_relatorio_pdf"):
+    # A lista de modulos e descoberta, e nao escrita a mao: quando o pacote ganha
+    # um arquivo novo, ele entra sozinho. Ja perdi o modulo do PDF por causa de
+    # uma lista fixa que nao foi atualizada.
+    _faltando = []
+    for _info in pkgutil.iter_modules(_hidro.__path__):
+        try:
+            _mod = importlib.import_module(f"hidro.{_info.name}")
+        except Exception as _e:                                    # noqa: BLE001
+            _faltando.append(f"{_info.name} ({_e})")
+            continue
         for _nome in dir(_mod):
             if not _nome.startswith("_"):
                 setattr(_hidro, _nome, getattr(_mod, _nome))
+
+_ausentes = [n for n in ("fmt", "hidrostatica", "plot_curvas", "ler_arquivo_bruto",
+                         "gerar_relatorio")
+             if not hasattr(_hidro, n)]
 
 from interface import comum                                    # noqa: E402
 from interface import (inicio, p1_dados, p2_cotas, p3_geometria,  # noqa: E402
@@ -64,6 +76,13 @@ TELAS = {
     "7. Validacao": p7_validacao.render,
     "Relatorio final": p8_relatorio.render,
 }
+
+if _ausentes:
+    st.error(
+        "Faltam arquivos na pasta **hidro**: o pacote foi carregado sem "
+        + ", ".join(f"`{n}`" for n in _ausentes) +
+        ". Confira se todos os arquivos .py da pasta hidro foram enviados ao "
+        "repositorio, em especial `pdf.py`, e se nenhum ficou vazio.")
 
 comum.iniciar_estado()
 pagina = comum.barra_lateral()

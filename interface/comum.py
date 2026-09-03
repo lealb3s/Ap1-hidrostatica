@@ -43,7 +43,7 @@ PADRAO = {
     "opt": {"rho": 1.025, "metodo_x": "auto", "metodo_z": "auto",
             "volume_adotado": "longitudinal", "eixo_IL": "LCF",
             "origem_x": "tabela", "L_ref": "LPP", "B_ref": "BWL",
-            "sub_vertical": 4},
+            "sub_vertical": 4, "espessura_quilha": 0.0},
     "T_sel": 1.0,
 }
 
@@ -76,14 +76,40 @@ def principais() -> dict:
 
 
 def opcoes() -> dict:
-    """Convencoes de calculo, sempre como dicionario e sem chave faltando."""
+    """
+    Convencoes de calculo, sempre como dicionario e sem chave faltando.
+
+    As dimensoes principais sao copiadas para dentro das opcoes a cada chamada.
+    O nucleo le o comprimento e a boca dos coeficientes em opt["LPP"] e opt["B"];
+    sem essa copia ele nao os encontrava e caia no comprimento na linha d'agua,
+    de modo que escolher "LPP" na etapa 1 nao surtia efeito algum e as curvas de
+    C_B, C_WP e C_P saiam serrilhadas mesmo com a opcao correta marcada.
+    """
     o = st.session_state.get("opt")
     if not isinstance(o, dict):
         o = PADRAO["opt"].copy()
         st.session_state["opt"] = o
     for k, v in PADRAO["opt"].items():
         o.setdefault(k, v)
+
+    p = principais()
+    for chave in ("LPP", "B", "D", "Td"):
+        valor = p.get(chave)
+        if valor:
+            o[chave] = float(valor)
+        else:
+            o.pop(chave, None)
     return o
+
+
+CHAVES_RESULTADO = ("rho", "metodo_x", "metodo_z", "volume_adotado", "eixo_IL",
+                    "origem_x", "L_ref", "B_ref", "sub_vertical", "espessura_quilha",
+                    "LPP", "B")
+
+
+def assinatura_calculo(opt: dict) -> dict:
+    """Fotografia das opcoes que mudam os numeros, para detectar tabela desatualizada."""
+    return {k: opt.get(k) for k in CHAVES_RESULTADO}
 
 
 def rerodar():

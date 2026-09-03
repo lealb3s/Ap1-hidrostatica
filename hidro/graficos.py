@@ -218,11 +218,15 @@ def plot_3d(tab: Tabela, T=None, superficie=True, exagero=1.0, elev=22, azim=-12
         titulo += f"  -  escalas y e z ampliadas {fmt(exagero,1)}x apenas para visualizacao"
     ax.set_title(titulo + "\nRepresentacao aproximada: nao substitui software de modelagem",
                  fontsize=10, fontweight="bold")
-    Lx = float(tab.x[-1] - tab.x[0]) or 1.0
-    Ly = 2 * float(np.nanmax(Y)) or 1.0
-    Lz = float(tab.z[-1] - tab.z[0]) or 1.0
+    def _dim2(v, minimo=1e-6):
+        v = abs(float(v)) if np.isfinite(v) else 0.0
+        return v if v > minimo else minimo
+
+    Lx = _dim2(tab.x[-1] - tab.x[0])
+    Ly = _dim2(2 * np.nanmax(Y) if np.isfinite(Y).any() else 0.0) * max(exagero, 1e-6)
+    Lz = _dim2(tab.z[-1] - tab.z[0]) * max(exagero, 1e-6)
     try:
-        ax.set_box_aspect((Lx, Ly * exagero, Lz * exagero))
+        ax.set_box_aspect((Lx, Ly, Lz))
     except Exception:
         pass
     ax.view_init(elev=elev, azim=azim)
@@ -434,15 +438,25 @@ def plot_3d_interativo(tab: Tabela, T=None, superficie=True, exagero=1.0,
             opacity=0.25, colorscale=[[0, COR_AGUA], [1, COR_AGUA]],
             name="linha d'agua", hoverinfo="skip"))
 
-    Lx = float(tab.x[-1] - tab.x[0]) or 1.0
-    Ly = (2 * float(np.nanmax(Y)) or 1.0) * exagero
-    Lz = (float(tab.z[-1] - tab.z[0]) or 1.0) * exagero
+    # As proporcoes da caixa 3D precisam ser numeros positivos e finitos. Um casco
+    # com x em ordem decrescente da comprimento negativo; uma tabela toda zerada da
+    # largura nula; e ambos fazem o Plotly recusar a figura inteira. Aqui cada
+    # dimensao e saneada antes de virar proporcao.
+    def _dim(v, minimo=1e-6):
+        v = abs(float(v)) if np.isfinite(v) else 0.0
+        return v if v > minimo else minimo
+
+    Lx = _dim(tab.x[-1] - tab.x[0])
+    Ly = _dim(2 * np.nanmax(Y) if np.isfinite(Y).any() else 0.0) * max(exagero, 1e-6)
+    Lz = _dim(tab.z[-1] - tab.z[0]) * max(exagero, 1e-6)
     maior = max(Lx, Ly, Lz)
+    # nenhuma dimensao some por completo: abaixo de 5 % a figura fica ilegivel
+    prop = {k: min(max(v / maior, 0.05), 1.0) for k, v in
+            (("x", Lx), ("y", Ly), ("z", Lz))}
     fig.update_layout(
         scene=dict(
             xaxis_title="x (m)", yaxis_title="y (m)", zaxis_title="z (m)",
-            aspectmode="manual",
-            aspectratio=dict(x=Lx / maior, y=Ly / maior, z=Lz / maior),
+            aspectmode="manual", aspectratio=prop,
             camera=dict(eye=dict(x=1.6, y=-1.5, z=0.9)),
         ),
         margin=dict(l=0, r=0, t=10, b=0), height=620,

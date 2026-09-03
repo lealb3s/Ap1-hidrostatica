@@ -270,7 +270,9 @@ def plot_secao(tab: Tabela, i: int, T: float):
 def plot_curvas(df: pd.DataFrame, chaves=None):
     """Painel com as curvas hidrostaticas obrigatorias (item 21)."""
     chaves = chaves or CURVAS_OBRIGATORIAS
-    colT = [c for c in df.columns if c.startswith("T (calado)")][0]
+    colT = coluna_calado(df)
+    if colT is None:
+        raise ValueError("A tabela nao tem coluna de calado: refaca a Hydrostatic Table.")
     T = df[colT].to_numpy(float)
     disponiveis = []
     for k in chaves:
@@ -325,7 +327,9 @@ def plot_diagrama_combinado(df: pd.DataFrame, chaves=None, separacao=28.0):
     deslocamento independentes, cada grandeza ocupa a sua propria faixa.
     """
     chaves = chaves or CURVAS_OBRIGATORIAS
-    colT = [c for c in df.columns if c.startswith("T (calado)")][0]
+    colT = coluna_calado(df)
+    if colT is None:
+        raise ValueError("A tabela nao tem coluna de calado: refaca a Hydrostatic Table.")
     T = df[colT].to_numpy(float)
 
     fig, ax = plt.subplots(figsize=(12.0, 7.4))

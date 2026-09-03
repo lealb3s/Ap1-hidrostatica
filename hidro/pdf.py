@@ -356,3 +356,7 @@ def gerar_relatorio_pdf(ctx: dict) -> bytes:
 
     doc.build(E, onFirstPage=rodape, onLaterPages=rodape)
     return buf.getvalue()
+        texto(f"- {lim}", "Nota")
+
+    doc.build(E, onFirstPage=rodape, onLaterPages=rodape)
+    return buf.getvalue()

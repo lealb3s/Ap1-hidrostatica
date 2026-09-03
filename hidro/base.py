@@ -77,6 +77,10 @@ PROPRIEDADES = {
     "KMT":    ("KM_t",                       "m",    4),
     "BML":    ("BM_l",                       "m",    4),
     "KML":    ("KM_l",                       "m",    4),
+    "KG":     ("KG (informado)",             "m",    4),
+    "GMT":    ("GM_t",                       "m",    4),
+    "GML":    ("GM_l",                       "m",    4),
+    "MTC":    ("MTC",                        "t.m/cm", 4),
     "AWP":    ("A_WP",                       "m2",   3),
     "IT":     ("I_t",                        "m4",   3),
     "IL":     ("I_l",                        "m4",   3),
@@ -93,6 +97,10 @@ PROPRIEDADES = {
 
 CURVAS_OBRIGATORIAS = ["VOL", "DESL", "LCB", "LCF", "KB", "BMT", "KMT",
                        "BML", "KML", "AWP", "TPC", "CB", "CWP", "CM", "CP"]
+
+# Curvas de estabilidade. So existem quando o KG e informado, porque KG depende da
+# distribuicao de pesos a bordo e nao pode ser obtido da tabela de cotas.
+CURVAS_ESTABILIDADE = ["GMT", "GML", "MTC"]
 
 
 # ============================================================================ #

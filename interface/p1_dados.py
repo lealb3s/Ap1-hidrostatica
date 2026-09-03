@@ -28,6 +28,13 @@ def render():
         p["Td"] = st.number_input("Td - calado de projeto (m)",
                                   value=float(p.get("Td", 0.0)), min_value=0.0,
                                   step=0.1, format="%.4f")
+        opt["espessura_quilha"] = st.number_input(
+            "Espessura da chapa de quilha (m)",
+            value=float(opt.get("espessura_quilha", 0.0)), min_value=0.0,
+            step=0.001, format="%.4f",
+            help="Referencia vertical. O calado moldado e medido a partir da linha de "
+                 "base da tabela de cotas; o extremo soma esta espessura. Deixe zero se "
+                 "a tabela ja estiver na referencia que voce quer usar.")
         opt["rho"] = st.number_input(
             "rho - densidade da agua (t/m3)", value=float(opt.get("rho", 1.025)),
             min_value=0.100, max_value=2.000, step=0.001, format="%.4f",
@@ -51,6 +58,10 @@ def render():
                 index=0 if opt.get("L_ref") == "LPP" else 1,
                 format_func=lambda k: {"LPP": "LPP informado acima",
                                        "LWL": "comprimento na linha d'agua"}[k])
+            if opt["L_ref"] == "LPP" and not p.get("LPP"):
+                st.error("Voce escolheu o LPP para os coeficientes, mas nao informou o "
+                         "valor dele acima. Sem o LPP o aplicativo usa o comprimento na "
+                         "linha d'agua, e C_B, C_WP e C_P saem serrilhados.")
             if opt["L_ref"] == "LWL":
                 st.warning(
                     "O comprimento na linha d'agua e medido entre as balizas molhadas, "

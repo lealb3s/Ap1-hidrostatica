@@ -41,20 +41,40 @@ import pkgutil                                                    # noqa: E402
 
 import hidro as _hidro                                            # noqa: E402
 
+# Modulos que o pacote precisa ter, e o que cada um fornece ao restante.
+_ESPERADOS = {
+    "base": "constantes, leitura de numeros e historico",
+    "leitura": "abertura do arquivo e deteccao do layout",
+    "tabela": "modelo da tabela e diagnostico",
+    "integracao": "Trapezio e Simpson",
+    "hidrostatica": "areas, volumes e centros",
+    "graficos": "plano de linhas e curvas",
+    "relatorio": "relatorio HTML e Excel",
+    "pdf": "relatorio em PDF (opcional)",
+}
+
+# erros que o proprio pacote registrou ao se carregar
+_erros = dict(getattr(_hidro, "ERROS_IMPORT", {}))
+
 if not hasattr(_hidro, "fmt") or not hasattr(_hidro, "gerar_relatorio_pdf"):
     # A lista de modulos e descoberta, e nao escrita a mao: quando o pacote ganha
-    # um arquivo novo, ele entra sozinho. Ja perdi o modulo do PDF por causa de
-    # uma lista fixa que nao foi atualizada.
-    _faltando = []
+    # um arquivo novo, ele entra sozinho.
     for _info in pkgutil.iter_modules(_hidro.__path__):
         try:
             _mod = importlib.import_module(f"hidro.{_info.name}")
         except Exception as _e:                                    # noqa: BLE001
-            _faltando.append(f"{_info.name} ({_e})")
+            _erros.setdefault(_info.name, f"{type(_e).__name__}: {_e}")
             continue
+        _erros.pop(_info.name, None)
         for _nome in dir(_mod):
             if not _nome.startswith("_"):
                 setattr(_hidro, _nome, getattr(_mod, _nome))
+
+# um modulo que nem chegou a ser encontrado no disco
+_no_disco = {i.name for i in pkgutil.iter_modules(_hidro.__path__)}
+for _n in _ESPERADOS:
+    if _n not in _no_disco and _n not in _erros:
+        _erros[_n] = "arquivo ausente na pasta hidro"
 
 _ausentes = [n for n in ("fmt", "hidrostatica", "plot_curvas", "ler_arquivo_bruto",
                          "gerar_relatorio")
@@ -77,12 +97,36 @@ TELAS = {
     "Relatorio final": p8_relatorio.render,
 }
 
-if _ausentes:
+_erros_pdf = {k: v for k, v in _erros.items() if k == "pdf"}
+_erros = {k: v for k, v in _erros.items() if k != "pdf"}
+if _erros_pdf and not _erros:
+    st.warning("O relatorio em PDF nao esta disponivel: "
+               + "; ".join(f"hidro/pdf.py - {v}" for v in _erros_pdf.values())
+               + ". O relatorio em HTML continua funcionando normalmente.")
+
+if _erros or _ausentes:
+    _linhas = []
+    for _n, _msg in _erros.items():
+        _linhas.append(f"- **hidro/{_n}.py** — {_msg}  \n  "
+                       f"_(fornece: {_ESPERADOS.get(_n, 'modulo extra')})_")
+    # um modulo pode falhar so porque outro, do qual ele depende, falhou antes
+    _raiz = [n for n in _erros if "No module named" not in _erros[n]
+             and "ausente" not in _erros[n]]
+    _sumidos = [n for n in _erros if "ausente" in _erros[n]
+                or "No module named" in _erros[n]]
     st.error(
-        "Faltam arquivos na pasta **hidro**: o pacote foi carregado sem "
-        + ", ".join(f"`{n}`" for n in _ausentes) +
-        ". Confira se todos os arquivos .py da pasta hidro foram enviados ao "
-        "repositorio, em especial `pdf.py`, e se nenhum ficou vazio.")
+        "### O pacote de calculo nao foi carregado por inteiro\n\n"
+        + "\n".join(_linhas) +
+        ("\n\n**Comece pelos arquivos que faltam:** "
+         + ", ".join(f"`hidro/{n}.py`" for n in _sumidos) +
+         ". Os demais podem estar falhando so porque dependem deles."
+         if _sumidos else "") +
+        "\n\nEnvie os arquivos que faltam para a pasta **hidro** do repositorio e "
+        "confira se nenhum ficou vazio.")
+    if _ausentes and not _erros:
+        st.error("Funcoes que o programa nao encontrou: "
+                 + ", ".join(f"`{n}`" for n in _ausentes))
+    st.stop()
 
 comum.iniciar_estado()
 pagina = comum.barra_lateral()

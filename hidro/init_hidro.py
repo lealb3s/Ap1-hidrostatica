@@ -14,22 +14,27 @@ Cada modulo cuida de uma etapa, na ordem em que os dados percorrem o programa:
     pdf.py           relatorio final em PDF (opcional: exige a biblioteca reportlab)
 
 Para mexer em uma formula, abra o modulo correspondente: nada mais precisa mudar.
+
+Se um arquivo faltar ou tiver erro, o pacote NAO interrompe a importacao aqui: o
+motivo fica guardado em ERROS_IMPORT e o app.py mostra na tela qual arquivo esta
+faltando. Interromper aqui produzia apenas um traceback, sem dizer o que enviar.
 """
 
-# Nucleo: sem qualquer um destes o aplicativo nao tem o que calcular, entao a
-# falta de um deve aparecer imediatamente.
-from .base import *          # noqa: F401,F403
-from .leitura import *       # noqa: F401,F403
-from .tabela import *        # noqa: F401,F403
-from .integracao import *    # noqa: F401,F403
-from .hidrostatica import *  # noqa: F401,F403
-from .graficos import *      # noqa: F401,F403
-from .relatorio import *     # noqa: F401,F403
+import importlib
 
-# Opcional: o relatorio em PDF depende da biblioteca reportlab. Se o arquivo nao
-# tiver sido enviado ou a biblioteca nao estiver instalada, o resto do aplicativo
-# continua funcionando e apenas o botao de PDF avisa o que falta.
-try:
-    from .pdf import *       # noqa: F401,F403
-except Exception:            # noqa: BLE001
-    pass
+ERROS_IMPORT = {}
+
+_MODULOS = ["base", "leitura", "tabela", "integracao", "hidrostatica",
+            "graficos", "relatorio", "pdf"]
+
+for _nome in _MODULOS:
+    try:
+        _mod = importlib.import_module(f".{_nome}", __name__)
+    except Exception as _e:                       # noqa: BLE001
+        ERROS_IMPORT[_nome] = f"{type(_e).__name__}: {_e}"
+        continue
+    for _chave in dir(_mod):
+        if not _chave.startswith("_"):
+            globals()[_chave] = getattr(_mod, _chave)
+
+del importlib

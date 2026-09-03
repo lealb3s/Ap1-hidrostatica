@@ -222,9 +222,17 @@ def render():
         if faltando:
             st.info("Calcule a Hydrostatic Table na primeira aba.")
         else:
-            escolhidas = st.multiselect("Curvas a exibir", H.CURVAS_OBRIGATORIAS,
-                                        default=H.CURVAS_OBRIGATORIAS,
+            disponiveis = list(H.CURVAS_OBRIGATORIAS)
+            for k in H.CURVAS_ESTABILIDADE:
+                col = f"{H.PROPRIEDADES[k][0]} [{H.PROPRIEDADES[k][1]}]"
+                if col in df_ht.columns and np.isfinite(df_ht[col].to_numpy(float)).any():
+                    disponiveis.append(k)
+            escolhidas = st.multiselect("Curvas a exibir", disponiveis,
+                                        default=disponiveis,
                                         format_func=lambda k: f"T x {H.PROPRIEDADES[k][0]}")
+            if len(disponiveis) == len(H.CURVAS_OBRIGATORIAS):
+                st.caption("Informe o KG na etapa 1 para que as curvas de GM_t, GM_l e "
+                           "MTC tambem sejam tracadas.")
             if escolhidas:
                 fig = H.plot_curvas(df_ht, escolhidas)
                 st.pyplot(fig, **W())

@@ -151,8 +151,11 @@ def plot_alto(tab: Tabela, T=None, n_buttock=5, ax=None):
         ax.axhline(z_base(tab) + T, color=COR_AGUA, lw=1.6, ls="--")
     _acabamento(ax, "Linhas de alto / perfil (Buttock Lines)", "x (m)", "z (m)",
                 ajuste="box")
+    # a legenda vai para FORA: num casco longo esta vista fica baixa e estreita,
+    # e a legenda por dentro cobre justamente as curvas das extremidades
     if ax.get_legend_handles_labels()[0]:
-        ax.legend(fontsize=6, ncol=3, loc="lower right")
+        ax.legend(fontsize=6, loc="center left", bbox_to_anchor=(1.01, 0.5),
+                  frameon=True, borderpad=0.4)
     if criado:
         fig.tight_layout()
         return fig

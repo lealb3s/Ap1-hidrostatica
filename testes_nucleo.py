@@ -407,6 +407,66 @@ except Exception as e:
 
 
 # ============================================================================
+
+
+# ============================================================================
+print("\n[10] Interpolacao monotona e refinamento da tabela")
+xr_ = np.array([0, 1, 2, 3, 4.0])
+yr_ = np.array([0, 1.0, 1.4, 1.5, 1.5])
+qq = np.linspace(0, 4, 41)
+mm = g["interp_monotona"](xr_, yr_, qq)
+checa("Curva monotona passa pelos pontos originais",
+      bool(np.allclose(g["interp_monotona"](xr_, yr_, xr_), yr_)))
+checa("Curva monotona nao ultrapassa os valores dos dados",
+      bool(mm.max() <= yr_.max() + 1e-12 and mm.min() >= yr_.min() - 1e-12))
+checa("Curva monotona nao oscila em dados crescentes",
+      bool(np.all(np.diff(mm) >= -1e-12)))
+
+# casco de secao semicircular: solucao exata conhecida
+Lc, Rc = 30.0, 2.0
+vol_ex = Lc * np.pi * Rc ** 2 / 2
+kb_ex = Rc - 4 * Rc / (3 * np.pi)
+xc = np.linspace(0, Lc, 11)
+zc = np.linspace(0, Rc, 5)
+tc = g["nova_tabela"](xc, zc, np.tile(np.sqrt(np.clip(zc * (2 * Rc - zc), 0, None)), (11, 1)))
+oc = dict(opt); oc.update({"LPP": Lc, "B": 2 * Rc, "sub_vertical": 4})
+r_bruto = g["hidrostatica"](tc, Rc, oc)
+tref, resumo = g["refinar_tabela"](tc, 1, 4, "monotona")
+r_ref = g["hidrostatica"](tref, Rc, oc)
+e0 = abs(r_bruto["VOL_L"] - vol_ex) / vol_ex * 100
+e1 = abs(r_ref["VOL_L"] - vol_ex) / vol_ex * 100
+checa("Refinar aproxima o volume da solucao exata", e1 < e0,
+      f"{e0:.3f} % -> {e1:.3f} %")
+k0 = abs(r_bruto["KB"] - kb_ex) / kb_ex * 100
+k1 = abs(r_ref["KB"] - kb_ex) / kb_ex * 100
+checa("Refinar aproxima o KB da solucao exata", k1 < k0, f"{k0:.3f} % -> {k1:.3f} %")
+checa("Refinamento preserva os pontos originais como dados de arquivo",
+      int(tref.original.sum()) == tc.n_est * tc.n_wl,
+      f"{int(tref.original.sum())} de {tc.n_est * tc.n_wl}")
+
+# refinamento linear nao pode alterar resultado nenhum
+tlin, _ = g["refinar_tabela"](tc, 1, 4, "linear")
+checa("Refinamento linear nao altera o volume",
+      perto(g["hidrostatica"](tlin, Rc, oc)["VOL_L"], r_bruto["VOL_L"], 1e-9))
+
+# a barcaca continua exata depois de refinada
+tbr, _ = g["refinar_tabela"](tab, 2, 2, "monotona")
+rbr = g["hidrostatica"](tbr, T, opt)
+checa("Barcaca refinada continua exata", perto(rbr["VOL_L"], L * B * T, 1e-9),
+      f"{rbr['VOL_L']}")
+
+# malha vertical subdividida corrige o KB de calado baixo
+tv2 = g["nova_tabela"](np.linspace(0, 20, 11), np.array([0.0, 1.0]),
+                       np.tile(np.array([0.0, 2.0]), (11, 1)))
+o2 = dict(opt); o2.update({"LPP": 20.0, "B": 4.0})
+kb_sub1 = g["hidrostatica"](tv2, 1.0, {**o2, "sub_vertical": 1})["KB"]
+kb_sub8 = g["hidrostatica"](tv2, 1.0, {**o2, "sub_vertical": 8})["KB"]
+checa("Sem subdividir, KB de um unico intervalo da o valor impossivel T",
+      perto(kb_sub1, 1.0, 1e-9), f"KB={kb_sub1}")
+checa("Subdividindo, KB do casco em V converge para 2T/3",
+      perto(kb_sub8, 2.0 / 3.0, 1e-3), f"KB={kb_sub8}")
+
+
 print("\n" + "=" * 70)
 if falhas:
     print(f"{len(falhas)} FALHA(S):")

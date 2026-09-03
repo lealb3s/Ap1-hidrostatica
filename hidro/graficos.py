@@ -296,16 +296,37 @@ def plot_curvas(df: pd.DataFrame, chaves=None):
     return fig
 
 
-def plot_diagrama_combinado(df: pd.DataFrame, chaves=None):
+def _fator_bonito(v: float) -> float:
+    """Arredonda para o 1, 2 ou 5 vezes potencia de dez mais proximo por cima."""
+    if not np.isfinite(v) or v <= 0:
+        return 1.0
+    e = np.floor(np.log10(v))
+    m = v / 10 ** e
+    for c in (1, 2, 5):
+        if m <= c:
+            return float(c * 10 ** e)
+    return float(10 ** (e + 1))
+
+
+def plot_diagrama_combinado(df: pd.DataFrame, chaves=None, separacao=28.0):
     """
-    Diagrama hidrostatico combinado: varias curvas no mesmo par de eixos,
-    normalizadas pelo proprio maximo, com o fator de escala na legenda.
+    Diagrama hidrostatico combinado na convencao naval classica.
+
+    Cada curva e dividida por um fator de escala e deslocada horizontalmente, e
+    ambos aparecem na legenda no formato usual: "Vol (m3) [1:1000] +0".
+
+    Por que nao normalizar pelo maximo: grandezas proporcionais entre si ficariam
+    exatamente sobrepostas e sumiriam do desenho. Delta = rho x Vol e
+    TPC = rho x A_WP / 100, entao esses pares dariam a MESMA curva normalizada e
+    o leitor veria menos linhas do que a legenda promete. Com escala e
+    deslocamento independentes, cada grandeza ocupa a sua propria faixa.
     """
-    chaves = chaves or ["VOL", "DESL", "AWP", "KB", "KMT", "LCB", "LCF", "TPC", "CB"]
+    chaves = chaves or CURVAS_OBRIGATORIAS
     colT = [c for c in df.columns if c.startswith("T (calado)")][0]
     T = df[colT].to_numpy(float)
-    fig, ax = plt.subplots(figsize=(9.0, 6.0))
-    cmap = plt.get_cmap("tab10")
+
+    fig, ax = plt.subplots(figsize=(12.0, 7.4))
+    cmap = plt.get_cmap("tab20")
     k = 0
     for chave in chaves:
         rot, uni, _ = PROPRIEDADES[chave]
@@ -313,19 +334,29 @@ def plot_diagrama_combinado(df: pd.DataFrame, chaves=None):
         if col not in df.columns:
             continue
         v = df[col].to_numpy(float)
-        if not np.isfinite(v).any():
+        bons = np.isfinite(v)
+        if bons.sum() < 2:
             continue
-        esc = np.nanmax(np.abs(v))
-        if esc <= EPS:
-            continue
-        ax.plot(v / esc, T, lw=1.6, color=cmap(k % 10),
-                label=f"{rot} [{uni}]  (x {fmt(esc, 3)})")
+        vmin, vmax = float(np.nanmin(v)), float(np.nanmax(v))
+        faixa = vmax - vmin
+        if faixa <= EPS:
+            faixa = max(abs(vmax), 1.0)
+        esc = _fator_bonito(faixa / 100.0)
+        vp = v / esc
+        desloc = k * separacao - float(np.nanmin(vp))
+        desloc = round(desloc / 5.0) * 5.0
+        ax.plot(vp + desloc, T, lw=1.7, color=cmap(k % 20),
+                label=f"{rot} [{uni}]  [1:{esc:g}] {desloc:+.0f}")
         k += 1
-    ax.set_xlabel("valor normalizado pelo maximo de cada curva", fontsize=9)
-    ax.set_ylabel("Calado T (m)", fontsize=9)
-    ax.set_title("Diagrama hidrostatico combinado", fontsize=11, fontweight="bold")
+
+    ax.set_xlabel("valor de cada grandeza dividido pela sua escala e deslocado "
+                  "(ver legenda)", fontsize=9)
+    ax.set_ylabel("Calado T (m)", fontsize=10)
+    ax.set_title("Diagrama hidrostatico combinado", fontsize=12, fontweight="bold")
     ax.grid(True, ls=":", lw=0.6)
-    ax.legend(fontsize=7, loc="best")
+    ax.legend(fontsize=7, loc="center left", bbox_to_anchor=(1.01, 0.5),
+              frameon=True, title="grandeza  [1:escala] deslocamento",
+              title_fontsize=7.5)
     fig.tight_layout()
     return fig
 

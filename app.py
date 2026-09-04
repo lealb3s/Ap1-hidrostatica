@@ -59,15 +59,20 @@ _erros = dict(getattr(_hidro, "ERROS_IMPORT", {}))
 if not hasattr(_hidro, "fmt") or not hasattr(_hidro, "gerar_relatorio_pdf"):
     # A lista de modulos e descoberta, e nao escrita a mao: quando o pacote ganha
     # um arquivo novo, ele entra sozinho.
-    for _info in pkgutil.iter_modules(_hidro.__path__):
+    # so os modulos que o pacote realmente tem. Arquivos estranhos na pasta, como
+    # uma copia do __init__.py enviada com outro nome, sao ignorados de proposito.
+    _existentes = {i.name for i in pkgutil.iter_modules(_hidro.__path__)}
+    for _n2 in [n for n in _ESPERADOS if n in _existentes]:
         try:
-            _mod = importlib.import_module(f"hidro.{_info.name}")
+            _mod = importlib.import_module(f"hidro.{_n2}")
         except Exception as _e:                                    # noqa: BLE001
-            _erros.setdefault(_info.name, f"{type(_e).__name__}: {_e}")
+            _erros.setdefault(_n2, f"{type(_e).__name__}: {_e}")
             continue
-        _erros.pop(_info.name, None)
+        _erros.pop(_n2, None)
         for _nome in dir(_mod):
-            if not _nome.startswith("_"):
+            # ERROS_IMPORT pertence ao pacote: copiar a de um modulo apagaria o
+            # diagnostico verdadeiro por um de outro arquivo
+            if not _nome.startswith("_") and _nome != "ERROS_IMPORT":
                 setattr(_hidro, _nome, getattr(_mod, _nome))
 
 # um modulo que nem chegou a ser encontrado no disco
@@ -75,6 +80,15 @@ _no_disco = {i.name for i in pkgutil.iter_modules(_hidro.__path__)}
 for _n in _ESPERADOS:
     if _n not in _no_disco and _n not in _erros:
         _erros[_n] = "arquivo ausente na pasta hidro"
+
+# arquivos que nao pertencem ao pacote costumam ser copias enviadas por engano
+_intrusos = sorted(_no_disco - set(_ESPERADOS))
+if _intrusos:
+    st.warning(
+        "Ha arquivo que nao faz parte do pacote na pasta **hidro**: "
+        + ", ".join(f"`{n}.py`" for n in _intrusos) +
+        ". Se for uma copia do `__init__.py` enviada com outro nome, apague do "
+        "repositorio: ela nao e usada e pode atrapalhar o carregamento.")
 
 _ausentes = [n for n in ("fmt", "hidrostatica", "plot_curvas", "ler_arquivo_bruto",
                          "gerar_relatorio")

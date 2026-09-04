@@ -80,7 +80,15 @@ def render():
             st.info("O 3D so e gerado com a tabela completa. Volte a etapa 2 para "
                     "preencher as lacunas.")
         else:
-            fig3d = H.plot_3d_interativo(tab, T, True, 1.0)
+            try:
+                fig3d = H.plot_3d_interativo(tab, T, True, 1.0)
+            except Exception as e:                                   # noqa: BLE001
+                st.error(f"Nao foi possivel desenhar o casco em 3D: {e}\n\n"
+                         "O 3D e apenas ilustrativo: os calculos, o plano de linhas e "
+                         "as curvas continuam disponiveis normalmente. Isso costuma "
+                         "acontecer quando alguma dimensao da tabela e nula ou esta em "
+                         "ordem invertida; veja a aba Diagnostico.")
+                fig3d = None
             if fig3d is not None:
                 st.plotly_chart(fig3d, **W())
                 st.caption("Gire arrastando com o botao esquerdo, aproxime com a rolagem "
@@ -97,8 +105,12 @@ def render():
                                         help="1,0 mantem a escala real. Serve so para "
                                              "enxergar melhor; nao altera nenhum calculo.")
                     if not (sup and bal and lin) or exa != 1.0:
-                        st.plotly_chart(H.plot_3d_interativo(tab, T, sup, exa, bal, lin),
-                                        key="p3d_ajustado", **W())
+                        try:
+                            st.plotly_chart(
+                                H.plot_3d_interativo(tab, T, sup, exa, bal, lin),
+                                key="p3d_ajustado", **W())
+                        except Exception as e:                       # noqa: BLE001
+                            st.error(f"Nao foi possivel redesenhar com esses ajustes: {e}")
             else:
                 st.info("O Plotly nao esta instalado, entao o casco aparece como desenho "
                         "estatico. Instale com: pip install plotly")
@@ -109,8 +121,11 @@ def render():
                     elev = st.slider("Elevacao da camera", 0, 80, 22)
                     azim = st.slider("Rotacao da camera", -180, 180, -125)
                 with c2:
-                    fig = H.plot_3d(tab, T, sup, exa, elev, azim)
-                    st.pyplot(fig, **W())
-                    plt.close(fig)
+                    try:
+                        fig = H.plot_3d(tab, T, sup, exa, elev, azim)
+                        st.pyplot(fig, **W())
+                        plt.close(fig)
+                    except Exception as e:                           # noqa: BLE001
+                        st.error(f"Nao foi possivel desenhar o casco em 3D: {e}")
 
     botao_proximo("4. Metodos de calculo")

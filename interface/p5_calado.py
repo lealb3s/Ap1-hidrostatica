@@ -147,8 +147,12 @@ def render():
     T = float(st.session_state.get("T_sel") or 0.0)
 
     if T <= 1e-9:
-        st.info("Escolha um calado maior que zero no slider da barra lateral.")
-        return
+        st.warning(
+            "**Calado zero.** Nao ha volume deslocado, entao Delta, BM_t, BM_l, KM_t, "
+            "KM_l, C_B, C_M e C_P ficam vazios: todos teriam o volume no denominador. "
+            "Continuam definidos A_WP, LCF, I_t, TPC, C_WP e a superficie molhada, que "
+            "neste calado e a propria area do fundo. KB vale zero e o LCB recebe o LCF, "
+            "que e o limite do centro de carena quando o calado tende a zero.")
 
     st.caption(f"Calado T = {H.fmt(T)} m, medido a partir da linha de base z = "
                f"{H.fmt(H.z_base(tab))} m. Ajuste na barra lateral.")

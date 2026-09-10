@@ -52,7 +52,8 @@ def render():
     if not exige_tabela():
         return
     tab = st.session_state.tab
-    T = float(st.session_state.get("T_sel") or 0.0)
+    T = float(st.session_state.get("T_sel") if isinstance(
+        st.session_state.get("T_sel"), (int, float)) else 0.0)
 
     a1, a2, a3 = st.tabs(["Diagnostico", "Plano de linhas", "Casco 3D"])
 

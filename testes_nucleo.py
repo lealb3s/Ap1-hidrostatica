@@ -585,6 +585,40 @@ checa("Tabela sem linhas vazias nao dispara o aviso",
       "WL-VAZIA" not in [a.codigo for a in g["diagnosticar"](t13b, {})])
 
 
+
+
+# ============================================================================
+print("\n[14] Calado zero")
+o14 = dict(opt)
+o14.update({"LPP": L, "B": B, "sub_vertical": 4})
+r0 = g["hidrostatica"](tab, 0.0, o14)
+
+checa("Calado zero: volume nulo", perto(r0["VOL"], 0.0, 1e-12))
+checa("Calado zero: deslocamento nulo", perto(r0["DESL"], 0.0, 1e-12))
+checa("Calado zero: A_WP = area do fundo = L*B", perto(r0["AWP"], L * B, 1e-9),
+      f"{r0['AWP']}")
+checa("Calado zero: LCF = L/2", perto(r0["LCF"], L / 2, 1e-9))
+checa("Calado zero: LCB recebe o LCF (limite quando T -> 0)",
+      perto(r0["LCB"], r0["LCF"], 1e-12))
+checa("Calado zero: KB = 0", perto(r0["KB"], 0.0, 1e-12))
+checa("Calado zero: WSA = area do fundo", perto(r0["WSA"], L * B, 1e-9), f"{r0['WSA']}")
+checa("Calado zero: TPC = rho*A_WP/100", perto(r0["TPC"], 1.025 * L * B / 100, 1e-9))
+checa("Calado zero: C_WP = 1 na barcaca", perto(r0["CWP"], 1.0, 1e-9))
+checa("Calado zero: I_t = L*B^3/12", perto(r0["IT"], L * B ** 3 / 12, 1e-9), f"{r0['IT']}")
+for k in ("BMT", "KMT", "BML", "KML", "CB", "CM", "CP"):
+    checa(f"Calado zero: {g['PROPRIEDADES'][k][0]} fica vazio",
+          not np.isfinite(r0[k]), f"{r0[k]}")
+checa("Calado zero: E_vol nao vira indefinido", perto(r0["E_VOL"], 0.0, 1e-12))
+
+df0, _ = g["tabela_hidrostatica"](tab, 0.0, 4.0, 1.0, o14)
+colT0 = g["coluna_calado"](df0)
+checa("Hydrostatic Table aceita o calado zero como primeira linha",
+      len(df0) == 5 and perto(float(df0[colT0].to_numpy(float)[0]), 0.0, 1e-12),
+      f"{len(df0)} linhas, primeira em T={df0[colT0].to_numpy(float)[0]}")
+checa("Depois do calado zero as demais linhas continuam corretas",
+      perto(float(df0["Vol (adotado) [m3]"].to_numpy(float)[2]), L * B * 2.0, 1e-9))
+
+
 print("\n" + "=" * 70)
 if falhas:
     print(f"{len(falhas)} FALHA(S):")

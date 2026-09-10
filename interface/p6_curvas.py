@@ -1,292 +1,628 @@
 # -*- coding: utf-8 -*-
-"""Etapa 6: Hydrostatic Table e Hydrostatic Curves."""
-
+"""
+Testes do nucleo de calculo (secoes S1 a S9 do app.py), sem a interface Streamlit.
+Execute:  python testes.py
+"""
+import io
+import os
+import sys
 import numpy as np
 import pandas as pd
-import streamlit as st
-import matplotlib.pyplot as plt
 
-import hidro as H
-from .comum import (W, exige_completa, botao_proximo, calado_maximo,
-                    numero_seguro, slider_seguro, rerodar, opcoes, principais,
-                    assinatura_calculo, CHAVES_RESULTADO)
+AQUI = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, AQUI)
+import hidro as _H
+g = {k: getattr(_H, k) for k in dir(_H)}
 
-
-def _coluna_T(df):
-    return H.coluna_calado(df)
+falhas = []
 
 
-def _calcular():
-    tab = st.session_state.tab
-    opt = opcoes()
-    Tmax_d = calado_maximo()
-
-    st.caption(f"O calculo e repetido para uma sequencia de calados. A tabela de cotas "
-               f"cobre ate T = {H.fmt(Tmax_d)} m.")
-    if Tmax_d < 1e-6:
-        st.error("A altura coberta pela tabela e praticamente nula. Volte a etapa 2 e "
-                 "corrija as alturas das linhas d'agua.")
-        return
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        Tmin = numero_seguro("Calado inicial (m)", 0.001, Tmax_d,
-                             max(Tmax_d / 10, 0.001), passo=0.05, key="ht_tmin")
-    with c2:
-        T_util = float(H.calado_util(tab))
-        Tmax = numero_seguro("Calado final (m)", 0.002, Tmax_d, min(T_util, Tmax_d),
-                             passo=0.05, key="ht_tmax")
-    if T_util < Tmax_d - 1e-6:
-        st.caption(f"A tabela cobre ate {H.fmt(Tmax_d)} m, mas so descreve o casco ate "
-                   f"cerca de {H.fmt(T_util)} m: acima disso as meias-bocas sao nulas "
-                   "ou quase nulas. Por isso o calado final ja vem sugerido nesse valor.")
-    with c3:
-        dT = numero_seguro("Passo entre calados (m)", 0.001, max(Tmax_d, 0.002),
-                           max(Tmax_d / 20, 0.01), passo=0.05, key="ht_dt")
-
-    if Tmax <= Tmin:
-        st.error("O calado final precisa ser maior que o inicial.")
-        return
-    n_prev = int(np.floor((Tmax - Tmin) / dT + 1e-9)) + 1
-    if n_prev < 3:
-        st.warning(f"Com esses valores sairiam apenas {n_prev} calado(s). Curvas precisam de "
-                   "varios pontos: diminua o passo ou amplie a faixa.")
-    else:
-        st.info(f"Serao calculados {n_prev} calados.")
-
-    if st.button("Calcular a Hydrostatic Table", type="primary", **W()):
-        barra = st.progress(0.0)
-        with st.spinner("Percorrendo a faixa de calados..."):
-            df_ht, brutos = H.tabela_hidrostatica(tab, Tmin, Tmax, dT, opt, barra)
-        barra.empty()
-        if not len(df_ht):
-            st.error("Nenhum calado valido foi calculado. Reveja a faixa escolhida.")
-            return
-        st.session_state.df_ht = df_ht
-        st.session_state.brutos_ht = brutos
-        st.session_state["ht_params"] = (Tmin, Tmax, dT)
-        st.session_state["ht_assinatura"] = assinatura_calculo(opt)
-        H.registrar("Etapa 6", f"Hydrostatic Table calculada para {len(df_ht)} calados "
-                               f"({H.fmt(Tmin)} a {H.fmt(Tmax)} m, passo {H.fmt(dT)} m).",
-                    autor="usuario")
-        rerodar()
+def checa(nome, cond, detalhe=""):
+    print(f"  {'OK  ' if cond else 'FALHA'}  {nome}" + (f"   {detalhe}" if detalhe else ""))
+    if not cond:
+        falhas.append(nome)
 
 
-def _verificar(df_ht):
-    """
-    Confere o comportamento fisico das curvas e tambem a SUAVIDADE delas.
-
-    Uma curva hidrostatica de casco real sobe ou desce sem ziguezaguear. Quando o
-    sentido troca varias vezes, a causa quase nunca e o metodo de integracao: e
-    alguma grandeza do denominador que so muda em degraus, tipicamente o
-    comprimento na linha d'agua.
-    """
-    linhas = []
-    for chave, esperado in [("VOL", "crescente"), ("DESL", "crescente"),
-                            ("AWP", "nao decrescente"), ("KB", "crescente"),
-                            ("TPC", "nao decrescente")]:
-        col = f"{H.PROPRIEDADES[chave][0]} [{H.PROPRIEDADES[chave][1]}]"
-        if col not in df_ht.columns:
-            continue
-        v = df_ht[col].to_numpy(float)
-        if len(v) < 2:
-            continue
-        d = np.diff(v)
-        ok = np.all(d > -1e-9) if esperado == "crescente" else \
-            np.all(d > -1e-6 * max(np.nanmax(np.abs(v)), 1))
-        linhas.append({"Curva": f"T x {H.PROPRIEDADES[chave][0]}",
-                       "Esperado": esperado, "Situacao": "OK" if ok else "INCOERENTE"})
-
-    for chave in ("CB", "CWP", "CM", "CP"):
-        col = f"{H.PROPRIEDADES[chave][0]} [{H.PROPRIEDADES[chave][1]}]"
-        if col not in df_ht.columns:
-            continue
-        v = df_ht[col].to_numpy(float)
-        if len(v) < 4 or not np.isfinite(v).all():
-            continue
-        # Uma curva constante, como o C_B de uma barcaca paralelepipedica, varia
-        # apenas na ultima casa do ponto flutuante. Sem tolerancia, esse ruido de
-        # arredondamento troca de sinal a cada passo e o aplicativo acusava
-        # oscilacao num casco em que o coeficiente vale exatamente 1.
-        d = np.diff(v)
-        tol = max(1e-9 * max(abs(v).max(), 1.0), (v.max() - v.min()) * 1e-4)
-        d = np.where(np.abs(d) <= tol, 0.0, d)
-        sinais = np.sign(d[d != 0])
-        trocas = int((np.diff(sinais) != 0).sum()) if len(sinais) > 1 else 0
-        linhas.append({"Curva": f"T x {H.PROPRIEDADES[chave][0]}",
-                       "Esperado": "sem ziguezague",
-                       "Situacao": "OK" if trocas <= 2 else f"OSCILA ({trocas} trocas)"})
-    return pd.DataFrame(linhas)
+def perto(a, b, tol=1e-9):
+    return abs(a - b) <= tol * max(1.0, abs(b))
 
 
-def _diagnostico_oscilacao(df_ht, opt):
-    """Explica a causa mais provavel de coeficientes serrilhados."""
-    col = f"{H.PROPRIEDADES['LWL'][0]} [{H.PROPRIEDADES['LWL'][1]}]"
-    if col not in df_ht.columns:
-        return ""
+# ============================================================================
+print("\n[1] Leitura de numeros em formatos variados")
+casos = [("1,25", 1.25), ("1.25", 1.25), ("1.234,56", 1234.56), ("1,234.56", 1234.56),
+         ("  2,50 m ", 2.5), ("WL 3.5", 3.5), ("-0,75", -0.75), ("", np.nan),
+         ("n/a", np.nan), ("-", np.nan), (3, 3.0), (2.5, 2.5), ("1.234.567,89", 1234567.89)]
+for txt, esp in casos:
+    v = g["para_float"](txt)
+    ok = (np.isnan(v) and np.isnan(esp)) or perto(v, esp, 1e-12)
+    checa(f"para_float({txt!r}) -> {v}", ok)
+
+
+# ============================================================================
+print("\n[2] Integracao numerica: exatidao das regras")
+x = np.linspace(0, 6, 7)
+
+# trapezio exato para funcao linear
+f = 2 * x + 1
+I, _ = g["integrar"](x, f, "trapezio")
+checa("Trapezio exato em polinomio de grau 1", perto(I, 6 ** 2 + 6), f"I={I}")
+
+# Simpson 1/3 exato ate grau 3
+f = x ** 3 - 2 * x ** 2 + 5
+I, _ = g["integrar"](x, f, "simpson13")
+exato = 6 ** 4 / 4 - 2 * 6 ** 3 / 3 + 5 * 6
+checa("Simpson 1/3 exato em polinomio de grau 3", perto(I, exato, 1e-10), f"I={I}")
+
+# Simpson 3/8 exato ate grau 3
+x2 = np.linspace(0, 6, 7)
+I, aud = g["integrar"](x2, f, "simpson38")
+checa("Simpson 3/8 exato em polinomio de grau 3", perto(I, exato, 1e-10), f"I={I}")
+
+# automatico com numero impar de intervalos: 3/8 + 1/3
+x3 = np.linspace(0, 7, 8)  # 7 intervalos
+f3 = x3 ** 3 - 2 * x3 ** 2 + 5
+I, aud = g["integrar"](x3, f3, "auto")
+exato3 = 7 ** 4 / 4 - 2 * 7 ** 3 / 3 + 5 * 7
+regras = [a["Regra"] for a in aud]
+checa("Auto (7 intervalos) exato em grau 3", perto(I, exato3, 1e-10), f"I={I}")
+checa("Auto usa 3/8 + 1/3 em numero impar",
+      "Simpson 3/8" in regras and "Simpson 1/3" in regras, str(regras))
+
+# pesos reproduzem a integral
+a, mult, plano = g["pesos_integracao"](x3, "auto")
+checa("Soma dos pesos a_i reproduz a integral", perto(float(np.dot(a, f3)), I, 1e-12))
+checa("Soma dos pesos = comprimento do intervalo", perto(float(a.sum()), 7.0, 1e-12))
+
+# passo nao uniforme -> trapezio nos trechos irregulares
+xn = np.array([0, 1, 2, 3, 5, 7.0])
+fn = 3 * xn + 2
+I, aud = g["integrar"](xn, fn, "auto")
+checa("Passo nao uniforme: linear ainda exato",
+      perto(I, 3 * 7 ** 2 / 2 + 2 * 7, 1e-10), f"I={I}")
+checa("Auditoria em formato do enunciado",
+      "estacoes 0-" in g["auditoria_texto"](aud), g["auditoria_texto"](aud))
+
+
+# ============================================================================
+print("\n[3] Barcaca paralelepipedica: comparacao com a solucao analitica")
+L, B, D, T = 40.0, 10.0, 5.0, 2.0
+tab = g["barcaca_teste"](L, B, D, 11, 11)
+opt = {"rho": 1.025, "metodo_x": "auto", "metodo_z": "auto",
+       "volume_adotado": "longitudinal", "eixo_IL": "LCF",
+       "origem_x": "tabela", "L_ref": "LPP", "B_ref": "BWL", "LPP": L, "B": B}
+r = g["hidrostatica"](tab, T, opt)
+
+checa("Volume = L*B*T", perto(r["VOL_L"], L * B * T, 1e-10), f"{r['VOL_L']}")
+checa("Volume vertical = Volume longitudinal", perto(r["VOL_V"], L * B * T, 1e-10))
+checa("E_vol ~ 0", r["E_VOL"] < 1e-8, f"{r['E_VOL']}")
+checa("KB = T/2", perto(r["KB"], T / 2, 1e-10), f"{r['KB']}")
+checa("LCB = L/2", perto(r["LCB"], L / 2, 1e-10), f"{r['LCB']}")
+checa("LCF = L/2", perto(r["LCF"], L / 2, 1e-10), f"{r['LCF']}")
+checa("A_WP = L*B", perto(r["AWP"], L * B, 1e-10), f"{r['AWP']}")
+checa("BM_t = B^2/(12T)", perto(r["BMT"], B ** 2 / (12 * T), 1e-9), f"{r['BMT']}")
+checa("BM_l = L^2/(12T)", perto(r["BML"], L ** 2 / (12 * T), 1e-9), f"{r['BML']}")
+checa("KM_t = KB + BM_t", perto(r["KMT"], r["KB"] + r["BMT"], 1e-12))
+checa("Delta = rho*Vol", perto(r["DESL"], 1.025 * L * B * T, 1e-10))
+checa("TPC = rho*AWP/100", perto(r["TPC"], 1.025 * L * B / 100, 1e-10))
+for c in ("CB", "CWP", "CM", "CP"):
+    checa(f"{c} = 1", perto(r[c], 1.0, 1e-9), f"{r[c]}")
+checa("C_B = C_M * C_P", perto(r["CB"], r["CM"] * r["CP"], 1e-12))
+checa("WSA = L*B + 2*L*T", perto(r["WSA"], L * B + 2 * L * T, 1e-9), f"{r['WSA']}")
+
+df = g["validacao_analitica"](r, L, B, T)
+checa("Tabela de validacao analitica com erro < 1e-6 %",
+      float(np.nanmax(df["Erro (%)"])) < 1e-6, f"max={np.nanmax(df['Erro (%)']):.2e}")
+
+# calado entre linhas d'agua (interpolacao do calado)
+T2 = 1.73
+r2 = g["hidrostatica"](tab, T2, opt)
+checa("Barcaca com calado fora da malha: Vol = L*B*T",
+      perto(r2["VOL_L"], L * B * T2, 1e-9), f"{r2['VOL_L']}")
+checa("Barcaca com calado fora da malha: KB = T/2",
+      perto(r2["KB"], T2 / 2, 1e-9), f"{r2['KB']}")
+
+
+# ============================================================================
+print("\n[4] Casco em V (prisma triangular): segunda solucao analitica")
+Lv, Bv, Dv, Tv = 30.0, 8.0, 4.0, 3.0
+nx, nz = 13, 17
+xv = np.linspace(0, Lv, nx)
+zv = np.linspace(0, Dv, nz)
+Yv = np.tile((Bv / 2) * (zv / Dv), (nx, 1))
+tv = g["nova_tabela"](xv, zv, Yv)
+optv = dict(opt)
+optv.update({"LPP": Lv, "B": Bv})
+rv = g["hidrostatica"](tv, Tv, optv)
+
+vol_ex = Lv * (Bv / (2 * Dv)) * Tv ** 2
+awp_ex = Lv * Bv * Tv / Dv
+kb_ex = 2.0 / 3.0 * Tv
+it_ex = (2.0 / 3.0) * Lv * (Bv * Tv / (2 * Dv)) ** 3
+checa("V: Volume longitudinal", perto(rv["VOL_L"], vol_ex, 1e-9), f"{rv['VOL_L']} vs {vol_ex}")
+checa("V: Volume vertical", perto(rv["VOL_V"], vol_ex, 1e-9), f"{rv['VOL_V']}")
+checa("V: A_WP", perto(rv["AWP"], awp_ex, 1e-9), f"{rv['AWP']}")
+checa("V: KB = 2T/3", perto(rv["KB"], kb_ex, 1e-9), f"{rv['KB']}")
+checa("V: I_t", perto(rv["IT"], it_ex, 1e-9), f"{rv['IT']}")
+checa("V: LCB = L/2", perto(rv["LCB"], Lv / 2, 1e-9))
+checa("V: C_M = 0,5", perto(rv["CM"], 0.5, 1e-9), f"{rv['CM']}")
+checa("V: C_B = C_M*C_P", perto(rv["CB"], rv["CM"] * rv["CP"], 1e-12))
+lado = np.hypot(Bv * Tv / (2 * Dv), Tv)
+checa("V: WSA = 2*L*lado", perto(rv["WSA"], 2 * Lv * lado, 1e-9), f"{rv['WSA']}")
+
+
+# ============================================================================
+print("\n[5] Comportamento das curvas hidrostaticas")
+df_ht, brutos = g["tabela_hidrostatica"](tv, 0.5, 4.0, 0.25, optv)
+colT = [c for c in df_ht.columns if c.startswith("T moldado")][0]
+for chave, nome in [("VOL", "Volume"), ("DESL", "Deslocamento"), ("AWP", "A_WP"),
+                    ("KB", "KB"), ("TPC", "TPC")]:
+    col = f"{g['PROPRIEDADES'][chave][0]} [{g['PROPRIEDADES'][chave][1]}]"
     v = df_ht[col].to_numpy(float)
-    if len(v) < 4 or not np.isfinite(v).all():
-        return ""
+    checa(f"Curva T x {nome} e crescente", bool(np.all(np.diff(v) > 0)))
+col = f"{g['PROPRIEDADES']['BMT'][0]} [m]"
+bmt = df_ht[col].to_numpy(float)
+# casco em V prismatico: I_t ~ T^3 e Vol ~ T^2, logo BM_t cresce linearmente com T
+checa("Curva T x BM_t cresce no casco em V", bool(np.all(np.diff(bmt) > 0)))
+raz = bmt / df_ht[colT].to_numpy(float)
+checa("BM_t/T constante no casco em V (comportamento analitico)",
+      bool(np.allclose(raz, raz[0], rtol=1e-9)), f"{raz[:3]}")
+lcb = df_ht[f"{g['PROPRIEDADES']['LCB'][0]} [m]"].to_numpy(float)
+checa("LCB constante = L/2 em casco simetrico prismatico",
+      bool(np.allclose(lcb, Lv / 2, atol=1e-8)), f"{lcb[:3]}")
+q = g["consultar_curva"](df_ht, 2.0)
+checa("Consulta numerica das curvas em T=2 m",
+      perto(q["Vol (adotado) [m3]"], Lv * (Bv / (2 * Dv)) * 4.0, 5e-3),
+      f"{q['Vol (adotado) [m3]']}")
+
+
+# ============================================================================
+print("\n[6] Leitura de arquivos: quatro layouts diferentes")
+
+
+class Falso:
+    """Imita o objeto retornado pelo file_uploader do Streamlit."""
+    def __init__(self, nome, dados):
+        self.name = nome
+        self._d = dados
+
+    def getvalue(self):
+        return self._d
+
+
+def canonico_de(arquivo):
+    abas = g["ler_arquivo_bruto"](arquivo)
+    grade = g["limpar_grade"](list(abas.values())[0])
+    longo = g["detectar_formato_longo"](grade)
+    if longo is not None:
+        return longo
+    det, gu, transp = g["detectar_melhor"](grade)
+    assert det.ok, "deteccao falhou"
+    x, z, Y, rot = g["montar_canonico"](gu, det)
+    return x, z, Y
+
+
+# --- referencia: barcaca 20 x 6 x 4, 5 estacoes, 5 WL
+xr = np.array([0.0, 5.0, 10.0, 15.0, 20.0])
+zr = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+Yr = np.full((5, 5), 3.0)
+Yr[0] = [1.0, 1.5, 2.0, 2.5, 3.0]      # popa afinada
+Yr[4] = [0.5, 1.0, 1.8, 2.4, 3.0]      # proa afinada
+
+
+def confere(nome, x, z, Y):
+    ok = (np.allclose(x, xr) and np.allclose(z, zr) and np.allclose(Y, Yr))
+    checa(nome, ok, "" if ok else f"\n   x={x}\n   z={z}\n   Y=\n{Y}")
+
+
+# --- Formato A: WL nas colunas, com linha de rotulos e linha de z (xlsx)
+linhas = [["TABELA DE COTAS - NAVIO TESTE", None, None, None, None, None, None],
+          [None, None, "WL 0", "WL 1", "WL 2", "WL 3", "WL 4"],
+          ["Baliza", "X", 0.0, 1.0, 2.0, 3.0, 4.0]]
+for i in range(5):
+    linhas.append([i, xr[i]] + list(Yr[i]))
+buf = io.BytesIO()
+pd.DataFrame(linhas).to_excel(buf, index=False, header=False)
+x, z, Y = canonico_de(Falso("formatoA.xlsx", buf.getvalue()))
+confere("Formato A (WL nas colunas, rotulos + linha de z, .xlsx)", x, z, Y)
+
+# --- Formato A-bis: layout exato do documento (z em linha propria, esquerda vazia)
+linhas = [["Balizas", "X"] + [f"WL {j}" for j in range(5)],
+          [None, None] + list(zr)]
+for i in range(5):
+    linhas.append([i, xr[i]] + list(Yr[i]))
+buf = io.BytesIO()
+pd.DataFrame(linhas).to_excel(buf, index=False, header=False)
+x, z, Y = canonico_de(Falso("formatoAbis.xlsx", buf.getvalue()))
+confere("Formato A-bis (layout do documento: linha de z abaixo dos rotulos)", x, z, Y)
+
+# --- Formato A2: apenas rotulos "WL 0.0" com a altura embutida, sem linha de z
+linhas = [["Baliza", "X"] + [f"WL {zz:.1f}" for zz in zr]]
+for i in range(5):
+    linhas.append([i, xr[i]] + list(Yr[i]))
+buf = io.BytesIO()
+pd.DataFrame(linhas).to_excel(buf, index=False, header=False)
+x, z, Y = canonico_de(Falso("formatoA2.xlsx", buf.getvalue()))
+confere("Formato A2 (altura embutida no rotulo da coluna)", x, z, Y)
+
+# --- Formato B: transposta (balizas nas colunas)
+linhas = [["WL / z"] + [f"Est {i}" for i in range(5)],
+          ["X"] + list(xr)]
+for j in range(5):
+    linhas.append([zr[j]] + [Yr[i][j] for i in range(5)])
+buf = io.BytesIO()
+pd.DataFrame(linhas).to_excel(buf, index=False, header=False)
+x, z, Y = canonico_de(Falso("formatoB.xlsx", buf.getvalue()))
+confere("Formato B (tabela transposta, balizas nas colunas)", x, z, Y)
+
+# --- Formato C: CSV brasileiro (ponto e virgula + virgula decimal)
+lin = ["Baliza;X;WL0;WL1;WL2;WL3;WL4", ";;0,00;1,00;2,00;3,00;4,00"]
+for i in range(5):
+    lin.append(f"{i};" + str(xr[i]).replace(".", ",") + ";" +
+               ";".join(str(v).replace(".", ",") for v in Yr[i]))
+dados = ("\n".join(lin)).encode("utf-8")
+x, z, Y = canonico_de(Falso("formatoC.csv", dados))
+confere("Formato C (CSV com ';' e virgula decimal)", x, z, Y)
+
+# --- Formato D: tabela longa x, z, y
+lin = ["x;z;y"]
+for i in range(5):
+    for j in range(5):
+        lin.append(f"{xr[i]};{zr[j]};{Yr[i][j]}")
+x, z, Y = canonico_de(Falso("formatoD.csv", ("\n".join(lin)).encode("utf-8")))
+confere("Formato D (tabela longa x, z, y)", x, z, Y)
+
+# --- Formato E: matriz nua, sem qualquer cabecalho de texto
+linhas = [[None, 0.0, 1.0, 2.0, 3.0, 4.0]]
+for i in range(5):
+    linhas.append([xr[i]] + list(Yr[i]))
+buf = io.BytesIO()
+pd.DataFrame(linhas).to_excel(buf, index=False, header=False)
+x, z, Y = canonico_de(Falso("formatoE.xlsx", buf.getvalue()))
+confere("Formato E (matriz nua: z na primeira linha, x na primeira coluna)", x, z, Y)
+
+# --- todos os layouts devem levar ao mesmo resultado hidrostatico
+t_ref = g["nova_tabela"](xr, zr, Yr)
+opt_ref = dict(opt)
+opt_ref.update({"LPP": 20.0, "B": 6.0})
+r_ref = g["hidrostatica"](t_ref, 2.0, opt_ref)
+checa("Casco assimetrico: LCB deslocado da meia-nau",
+      abs(r_ref["LCB"] - 10.0) > 1e-3, f"LCB={r_ref['LCB']}")
+checa("Casco assimetrico: volume positivo e coerente",
+      0 < r_ref["VOL_L"] < 20 * 6 * 2, f"{r_ref['VOL_L']}")
+checa("Casco assimetrico: E_vol pequeno", r_ref["E_VOL"] < 1.0, f"{r_ref['E_VOL']:.4f} %")
+
+
+# --- arquivos de exemplo entregues junto com o aplicativo -------------------
+pasta = os.path.join(AQUI, "exemplos")
+if os.path.isdir(pasta):
+    ref = None
+    for arq in sorted(os.listdir(pasta)):
+        if "barcaca" in arq:
+            continue
+        with open(os.path.join(pasta, arq), "rb") as fh:
+            x, z, Y = canonico_de(Falso(arq, fh.read()))
+        t = g["nova_tabela"](x, z, Y)
+        o = dict(opt); o.update({"L_ref": "LWL", "B_ref": "BWL"})
+        rr = g["hidrostatica"](t, 4.0, o)
+        if ref is None:
+            ref = rr["VOL_L"]
+        checa(f"Exemplo '{arq}' lido e com volume identico aos demais",
+              perto(rr["VOL_L"], ref, 1e-9), f"Vol={rr['VOL_L']:.4f} m3")
+
+
+# ============================================================================
+print("\n[7] Interpolacao e diagnostico")
+Yf = Yr.astype(float).copy()
+Yf[2, 2] = np.nan          # buraco interno
+Yf[3, 4] = np.nan          # topo
+tf = g["nova_tabela"](xr, zr, Yf)
+ti, regs = g["interpolar_tabela"](tf, topo="manter", base="zero")
+checa("Interpolacao preencheu todas as lacunas", bool(np.isfinite(ti.Y).all()))
+checa("Lacuna interna por interpolacao linear em z", perto(ti.Y[2, 2], 3.0, 1e-12),
+      f"{ti.Y[2,2]}")
+checa("Lacuna no topo mantendo o ultimo valor", perto(ti.Y[3, 4], Yf[3, 3], 1e-12))
+checa("Registro de cada interpolacao", len(regs) == 2, f"{len(regs)} registros")
+checa("Dados originais e interpolados separados", ti.n_interpolados() == 2)
+
+ach = g["diagnosticar"](tf, {"LPP": 20.0, "B": 6.0})
+cods = [a.codigo for a in ach]
+checa("Diagnostico detecta celulas vazias", "CEL-VAZIA" in cods, str(cods))
+
+Yd = Yr.astype(float).copy()
+td = g["nova_tabela"](np.array([0, 5, 5, 15, 20.0]), zr, Yd)
+checa("Diagnostico detecta estacoes duplicadas",
+      "EST-DUP" in [a.codigo for a in g["diagnosticar"](td, {})])
+
+tm = g["nova_tabela"](xr, zr, Yr * 1000)
+checa("Diagnostico suspeita de unidade errada",
+      "UNI-SUSP" in [a.codigo for a in g["diagnosticar"](tm, {})])
+
+tc = g["converter_unidade"](tm, "mm (milimetro)", "m (metro)")
+checa("Conversao de unidade mm -> m", perto(float(tc.Y[0, 0]), Yr[0, 0], 1e-12),
+      f"{tc.Y[0,0]}")
+
+
+# ============================================================================
+print("\n[8] Verificacoes internas e relatorio")
+dfv = g["verificacoes_internas"](r)
+checa("Consistencia interna com erro desprezivel",
+      float(np.nanmax(dfv["Erro absoluto"])) < 1e-8,
+      f"max={np.nanmax(dfv['Erro absoluto']):.2e}")
+
+html = g["gerar_relatorio"]({
+    "principais": {"nome": "Teste", "LPP": L, "B": B},
+    "tab": tab, "opt": opt, "unidade_origem": "m (metro)",
+    "origem_txt": "x conforme a tabela", "arquivo": "teste.xlsx", "aba": "-",
+    "notas_deteccao": [], "tab_original_df": tab.como_df(), "achados": [],
+    "avisos_ignorados": [], "interpolacoes": [], "aud_x": "-", "aud_z": "-",
+    "historico": pd.DataFrame([{"n": 1, "acao": "teste"}]),
+    "df_ht": df_ht, "resultado": r,
+    "df_resumo": pd.DataFrame([{"Propriedade": "Vol", "Valor": r["VOL"], "Unidade": "m3"}]),
+    "df_areas": pd.DataFrame({"Baliza": tab.rotulos, "A_i (m2)": r["_vol"]["A"]}),
+    "df_val_int": dfv, "interpretacao_evol": "ok",
+})
+checa("Relatorio HTML gerado", len(html) > 5000 and "Hydrostatic Table" in html,
+      f"{len(html)} caracteres")
+
+xls = g["excel_hydrostatic_table"](df_ht, tab, {"nome": "Teste"},
+                                   pd.DataFrame([{"n": 1}]), pd.DataFrame())
+checa("Exportacao .xlsx da Hydrostatic Table", len(xls) > 3000, f"{len(xls)} bytes")
+
+
+# ============================================================================
+print("\n[9] Graficos")
+import matplotlib.pyplot as plt
+for nome, fn in [("plano de linhas", lambda: g["plot_plano_de_linhas"](tab, 2.0)),
+                 ("body plan", lambda: g["plot_body_plan"](tab, 2.0)),
+                 ("meia-boca", lambda: g["plot_meia_boca"](tab, 2.0)),
+                 ("linhas de alto", lambda: g["plot_alto"](tab, 2.0)),
+                 ("3D", lambda: g["plot_3d"](tab, 2.0)),
+                 ("areas seccionais", lambda: g["plot_areas_seccionais"](
+                     tab, r["_vol"]["A"], 2.0)),
+                 ("secao isolada", lambda: g["plot_secao"](tab, 3, 2.0)),
+                 ("curvas", lambda: g["plot_curvas"](df_ht)),
+                 ("diagrama combinado", lambda: g["plot_diagrama_combinado"](df_ht))]:
+    try:
+        fig = fn()
+        png = g["fig_para_png"](fig)
+        plt.close(fig)
+        checa(f"Grafico: {nome}", len(png) > 3000, f"{len(png)} bytes")
+    except Exception as e:
+        checa(f"Grafico: {nome}", False, repr(e))
+
+# grafico do casco em V para inspecao visual
+try:
+    fig = g["plot_plano_de_linhas"](tv, 3.0)
+    fig.savefig(os.path.join(AQUI, "saida_plano_linhas_V.png"), dpi=100,
+                bbox_inches="tight")
+    plt.close(fig)
+    fig = g["plot_curvas"](df_ht)
+    fig.savefig(os.path.join(AQUI, "saida_curvas_V.png"), dpi=100, bbox_inches="tight")
+    plt.close(fig)
+    fig = g["plot_3d"](tv, 3.0)
+    fig.savefig(os.path.join(AQUI, "saida_3d_V.png"), dpi=100, bbox_inches="tight")
+    plt.close(fig)
+except Exception as e:
+    checa("Figuras de inspecao salvas", False, repr(e))
+
+
+# ============================================================================
+
+
+# ============================================================================
+print("\n[10] Interpolacao monotona e refinamento da tabela")
+xr_ = np.array([0, 1, 2, 3, 4.0])
+yr_ = np.array([0, 1.0, 1.4, 1.5, 1.5])
+qq = np.linspace(0, 4, 41)
+mm = g["interp_monotona"](xr_, yr_, qq)
+checa("Curva monotona passa pelos pontos originais",
+      bool(np.allclose(g["interp_monotona"](xr_, yr_, xr_), yr_)))
+checa("Curva monotona nao ultrapassa os valores dos dados",
+      bool(mm.max() <= yr_.max() + 1e-12 and mm.min() >= yr_.min() - 1e-12))
+checa("Curva monotona nao oscila em dados crescentes",
+      bool(np.all(np.diff(mm) >= -1e-12)))
+
+# casco de secao semicircular: solucao exata conhecida
+Lc, Rc = 30.0, 2.0
+vol_ex = Lc * np.pi * Rc ** 2 / 2
+kb_ex = Rc - 4 * Rc / (3 * np.pi)
+xc = np.linspace(0, Lc, 11)
+zc = np.linspace(0, Rc, 5)
+tc = g["nova_tabela"](xc, zc, np.tile(np.sqrt(np.clip(zc * (2 * Rc - zc), 0, None)), (11, 1)))
+oc = dict(opt); oc.update({"LPP": Lc, "B": 2 * Rc, "sub_vertical": 4})
+r_bruto = g["hidrostatica"](tc, Rc, oc)
+tref, resumo = g["refinar_tabela"](tc, 1, 4, "monotona")
+r_ref = g["hidrostatica"](tref, Rc, oc)
+e0 = abs(r_bruto["VOL_L"] - vol_ex) / vol_ex * 100
+e1 = abs(r_ref["VOL_L"] - vol_ex) / vol_ex * 100
+checa("Refinar aproxima o volume da solucao exata", e1 < e0,
+      f"{e0:.3f} % -> {e1:.3f} %")
+k0 = abs(r_bruto["KB"] - kb_ex) / kb_ex * 100
+k1 = abs(r_ref["KB"] - kb_ex) / kb_ex * 100
+checa("Refinar aproxima o KB da solucao exata", k1 < k0, f"{k0:.3f} % -> {k1:.3f} %")
+checa("Refinamento preserva os pontos originais como dados de arquivo",
+      int(tref.original.sum()) == tc.n_est * tc.n_wl,
+      f"{int(tref.original.sum())} de {tc.n_est * tc.n_wl}")
+
+# refinamento linear nao pode alterar resultado nenhum
+tlin, _ = g["refinar_tabela"](tc, 1, 4, "linear")
+checa("Refinamento linear nao altera o volume",
+      perto(g["hidrostatica"](tlin, Rc, oc)["VOL_L"], r_bruto["VOL_L"], 1e-9))
+
+# a barcaca continua exata depois de refinada
+tbr, _ = g["refinar_tabela"](tab, 2, 2, "monotona")
+rbr = g["hidrostatica"](tbr, T, opt)
+checa("Barcaca refinada continua exata", perto(rbr["VOL_L"], L * B * T, 1e-9),
+      f"{rbr['VOL_L']}")
+
+# malha vertical subdividida corrige o KB de calado baixo
+tv2 = g["nova_tabela"](np.linspace(0, 20, 11), np.array([0.0, 1.0]),
+                       np.tile(np.array([0.0, 2.0]), (11, 1)))
+o2 = dict(opt); o2.update({"LPP": 20.0, "B": 4.0})
+kb_sub1 = g["hidrostatica"](tv2, 1.0, {**o2, "sub_vertical": 1})["KB"]
+kb_sub8 = g["hidrostatica"](tv2, 1.0, {**o2, "sub_vertical": 8})["KB"]
+checa("Sem subdividir, KB de um unico intervalo da o valor impossivel T",
+      perto(kb_sub1, 1.0, 1e-9), f"KB={kb_sub1}")
+checa("Subdividindo, KB do casco em V converge para 2T/3",
+      perto(kb_sub8, 2.0 / 3.0, 1e-3), f"KB={kb_sub8}")
+
+
+
+
+# ============================================================================
+print("\n[11] Cabecalhos dificeis")
+
+# rotulos de linha d'agua puramente numericos, com a linha de alturas logo abaixo
+lin = ["WL;;6;5;4;3;2;1", "station;;0.429;0.857;1.286;1.714;2.143;2.571"]
+for i in range(6):
+    lin.append(f"{i};{i*2.8};6000;5999;5998;5996;5993;5944")
+x, z, Y = canonico_de(Falso("num.csv", "\n".join(lin).encode("utf-8")))
+checa("Rotulos de WL numericos nao sao confundidos com a linha de alturas",
+      len(z) == 6 and perto(z[0], 0.429, 1e-9), f"z={list(z)}")
+checa("Coluna de rotulo da baliza nao vira coluna X",
+      len(x) == 6 and perto(x[-1], 14.0, 1e-9), f"x={list(x)}")
+
+# alturas em ordem decrescente (tabela escrita do convés para a quilha)
+lin = ["Baliza;X;WL3;WL2;WL1", ";;3.0;2.0;1.0"]
+for i in range(5):
+    lin.append(f"{i};{i*5};3.0;2.5;2.0")
+x, z, Y = canonico_de(Falso("desc.csv", "\n".join(lin).encode("utf-8")))
+checa("Alturas em ordem decrescente sao lidas", len(z) == 3 and perto(z[0], 3.0, 1e-9),
+      f"z={list(z)}")
+t_desc = g["nova_tabela"](x, z, Y)
+checa("Diagnostico aponta linhas d'agua fora de ordem",
+      "WL-ORD" in [a.codigo for a in g["diagnosticar"](t_desc, {})])
+t_ord = g["ordenar_tabela"](t_desc)
+checa("Ordenar coloca as linhas d'agua em ordem crescente",
+      bool(np.all(np.diff(t_ord.z) > 0)) and perto(t_ord.z[0], 1.0, 1e-9))
+
+# LPP e LOA precisam ser lidos como grandezas diferentes
+lin = ["Comprimento total LOA;332.8;m", "Comprimento entre perpendiculares LBP;320;m",
+       "Boca B;60;m", "", "Baliza;X;WL0;WL1;WL2", ";;0;1;2"]
+for i in range(4):
+    lin.append(f"{i};{i*10};1;2;3")
+import io as _io
+abas = g["ler_arquivo_bruto"](Falso("dim.csv", "\n".join(lin).encode("utf-8")))
+gg = g["limpar_grade"](list(abas.values())[0])
+p = g["pistas_cabecalho"](gg)
+checa("LPP lido do rotulo correto", "lpp" in p and perto(p["lpp"][0], 320.0, 1e-9),
+      str(p.get("lpp")))
+checa("LOA lido separadamente do LPP", "loa" in p and perto(p["loa"][0], 332.8, 1e-9),
+      str(p.get("loa")))
+
+
+
+
+# ============================================================================
+print("\n[12] KG, GM e MTC")
+o_kg = dict(opt)
+o_kg.update({"LPP": L, "B": B, "sub_vertical": 4})
+r_sem = g["hidrostatica"](tab, T, o_kg)
+checa("Sem KG informado, GM_t fica indefinido",
+      not np.isfinite(r_sem["GMT"]) and not np.isfinite(r_sem["MTC"]))
+
+KG_teste = 2.5
+r_kg = g["hidrostatica"](tab, T, {**o_kg, "KG": KG_teste})
+checa("GM_t = KM_t - KG", perto(r_kg["GMT"], r_kg["KMT"] - KG_teste, 1e-12),
+      f"{r_kg['GMT']}")
+checa("GM_l = KM_l - KG", perto(r_kg["GML"], r_kg["KML"] - KG_teste, 1e-12))
+checa("MTC = Delta * GM_l / (100 L)",
+      perto(r_kg["MTC"], r_kg["DESL"] * r_kg["GML"] / (100 * L), 1e-12),
+      f"{r_kg['MTC']}")
+# barcaca: KM_t = T/2 + B^2/(12T) tem solucao fechada
+km_ex = T / 2 + B ** 2 / (12 * T)
+checa("Barcaca: GM_t confere com a solucao analitica",
+      perto(r_kg["GMT"], km_ex - KG_teste, 1e-9),
+      f"{r_kg['GMT']} vs {km_ex - KG_teste}")
+checa("KG informado nao altera nenhuma propriedade do casco",
+      all(perto(r_kg[k], r_sem[k], 1e-12) for k in
+          ("VOL_L", "AWP", "KB", "BMT", "KMT", "LCB", "LCF", "WSA", "CB")))
+df_kg, _ = g["tabela_hidrostatica"](tab, 1.0, 4.0, 1.0, {**o_kg, "KG": KG_teste})
+checa("Coluna de GM_t entra na Hydrostatic Table",
+      "GM_t [m]" in df_kg.columns and np.isfinite(df_kg["GM_t [m]"].to_numpy(float)).all())
+
+
+
+
+# ============================================================================
+print("\n[13] Calado util e falso alarme de oscilacao")
+
+# barcaca: C_B vale exatamente 1, e a variacao e so ruido de arredondamento
+o13 = dict(opt); o13.update({"LPP": L, "B": B, "sub_vertical": 4})
+df13, _ = g["tabela_hidrostatica"](tab, 0.5, 4.5, 0.5, o13)
+cb13 = df13["C_B [-]"].to_numpy(float)
+checa("Barcaca: C_B constante e igual a 1",
+      bool(np.allclose(cb13, 1.0, atol=1e-12)), f"amplitude {cb13.max()-cb13.min():.2e}")
+
+
+def _oscila(v, limite=2):
     d = np.diff(v)
     tol = max(1e-9 * max(abs(v).max(), 1.0), (v.max() - v.min()) * 1e-4)
-    sinais = np.sign(np.where(np.abs(d) <= tol, 0.0, d))
-    sinais = sinais[sinais != 0]
-    degraus = int((np.diff(sinais) != 0).sum()) if len(sinais) > 1 else 0
-    if opt.get("L_ref") == "LWL" and degraus > 2:
-        return ("**Causa provavel: o comprimento na linha d'agua.** Voce escolheu L_WL "
-                f"como comprimento dos coeficientes, e ele varia de {H.fmt(v.min())} a "
-                f"{H.fmt(v.max())} m em degraus, trocando de sentido {degraus} vezes ao "
-                "longo da faixa de calados. Isso acontece porque o L_WL e medido entre "
-                "as balizas molhadas e so pode mudar de uma baliza para a outra; num "
-                "casco com bulbo ele ate diminui quando o calado sobe, porque a baliza "
-                "extrema deixa de estar molhada.\n\n"
-                "Como C_B, C_WP e C_P tem o comprimento no denominador, cada degrau "
-                "vira um dente na curva. **Volte a etapa 1 e troque o comprimento dos "
-                "coeficientes para LPP.** Com o LPP as tres curvas sobem sem uma unica "
-                "troca de sentido.")
-    if degraus > 2:
-        return ("O comprimento na linha d'agua varia em degraus nesta faixa de calados, "
-                "o que e normal. Como voce esta usando o LPP nos coeficientes, isso nao "
-                "afeta as curvas.")
-    return ""
+    s_ = np.sign(np.where(np.abs(d) <= tol, 0.0, d))
+    s_ = s_[s_ != 0]
+    return (int((np.diff(s_) != 0).sum()) if len(s_) > 1 else 0) > limite
 
 
-def render():
-    st.title("6. Tabela e curvas")
-    if not exige_completa():
-        return
-    tab = st.session_state.tab
-    opt = opcoes()
+checa("Curva constante nao e acusada de oscilar", not _oscila(cb13))
+checa("Curva realmente serrilhada continua sendo detectada",
+      _oscila(np.array([1.0, 1.2, 1.0, 1.2, 1.0, 1.2, 1.0])))
 
-    # uma tabela guardada por uma versao anterior do programa pode nao ter as
-    # mesmas colunas. Nesse caso ela e descartada e o usuario e avisado, em vez
-    # de a tela quebrar ao procurar a coluna do calado.
-    if st.session_state.df_ht is not None and _coluna_T(st.session_state.df_ht) is None:
-        st.session_state.df_ht = None
-        st.session_state.brutos_ht = None
-        st.session_state["ht_assinatura"] = None
-        st.warning("A Hydrostatic Table que estava guardada foi gerada por uma versao "
-                   "anterior do aplicativo e nao pode mais ser lida. Clique em "
-                   "**Calcular a Hydrostatic Table** para refaze-la.")
+# calado util: tabela com linhas d'agua vazias no topo
+x13 = np.linspace(0, 20, 11)
+z13 = np.linspace(0, 5, 11)
+Y13 = np.tile(np.linspace(0.5, 3.0, 11), (11, 1))
+Y13[:, 8:] = 0.0                      # tres linhas d'agua superiores sem casco
+t13 = g["nova_tabela"](x13, z13, Y13)
+util = g["calado_util"](t13)
+checa("Calado util ignora as linhas d'agua vazias do topo",
+      perto(util, z13[7], 1e-9), f"util={util} de um maximo de {z13[-1]}")
+checa("Diagnostico avisa sobre linhas d'agua acima do casco",
+      "WL-VAZIA" in [a.codigo for a in g["diagnosticar"](t13, {})])
+t13b = g["nova_tabela"](x13, z13, np.tile(np.linspace(0.5, 3.0, 11), (11, 1)))
+checa("Tabela sem linhas vazias: calado util = calado maximo",
+      perto(g["calado_util"](t13b), g["calado_max"](t13b), 1e-9))
+checa("Tabela sem linhas vazias nao dispara o aviso",
+      "WL-VAZIA" not in [a.codigo for a in g["diagnosticar"](t13b, {})])
 
-    # a tabela guardada pode ter sido calculada com outras convencoes
-    antiga = st.session_state.get("ht_assinatura")
-    if st.session_state.df_ht is not None and antiga is not None:
-        atual = assinatura_calculo(opt)
-        mudou = [k for k in CHAVES_RESULTADO if antiga.get(k) != atual.get(k)]
-        if mudou:
-            nomes = {"rho": "densidade", "metodo_x": "integracao em x",
-                     "metodo_z": "integracao em z", "volume_adotado": "volume adotado",
-                     "eixo_IL": "eixo de I_l", "origem_x": "referencia de LCB e LCF",
-                     "L_ref": "comprimento dos coeficientes",
-                     "B_ref": "boca dos coeficientes",
-                     "sub_vertical": "malha vertical",
-                     "espessura_quilha": "espessura da quilha",
-                     "LPP": "LPP", "B": "boca B"}
-            st.warning(
-                "A Hydrostatic Table mostrada abaixo foi calculada ANTES de voce mudar: "
-                + ", ".join(nomes.get(k, k) for k in mudou) +
-                ". As curvas continuam mostrando os valores antigos ate voce clicar em "
-                "**Calcular a Hydrostatic Table** de novo.")
 
-    a1, a2, a3, a4 = st.tabs(["Hydrostatic Table", "Curvas", "Diagrama combinado",
-                              "Consultar um calado"])
 
-    with a1:
-        _calcular()
-        df_ht = st.session_state.df_ht
-        if df_ht is not None and len(df_ht):
-            st.dataframe(df_ht.style.format("{:.4f}"), height=430, **W())
-            c1, c2 = st.columns(2)
-            with c1:
-                xls = H.excel_hydrostatic_table(df_ht, tab, principais(),
-                                                H.historico_df(),
-                                                pd.DataFrame(st.session_state.interp_regs))
-                st.download_button("Baixar em Excel (.xlsx)", xls, "hydrostatic_table.xlsx",
-                                   "application/vnd.openxmlformats-officedocument."
-                                   "spreadsheetml.sheet", **W())
-            with c2:
-                st.download_button("Baixar em CSV", df_ht.to_csv(index=False, sep=";",
-                                                                 decimal=",").encode("utf-8-sig"),
-                                   "hydrostatic_table.csv", "text/csv", **W())
 
-            st.markdown("#### Comportamento das curvas")
-            dfc = _verificar(df_ht)
-            if len(dfc):
-                st.dataframe(dfc, hide_index=True, **W())
-                incoerente = (dfc["Situacao"] == "INCOERENTE").any()
-                oscila = dfc["Situacao"].astype(str).str.startswith("OSCILA").any()
-                if incoerente:
-                    st.warning("Alguma curva nao segue o comportamento fisico esperado. "
-                               "Isso aponta problema na tabela de cotas, e nao no metodo "
-                               "de integracao. Reveja a etapa 3 antes de usar estes "
-                               "resultados.")
-                if oscila:
-                    st.error("Ha curva de coeficiente ziguezagueando. Um coeficiente de "
-                             "forma de casco real varia de modo suave com o calado.")
-                    causa = _diagnostico_oscilacao(df_ht, opt)
-                    if causa:
-                        st.info(causa)
-                if not incoerente and not oscila:
-                    st.success("Todas as curvas verificadas seguem o comportamento "
-                               "esperado e nenhuma ziguezagueia.")
+# ============================================================================
+print("\n[14] Calado zero")
+o14 = dict(opt)
+o14.update({"LPP": L, "B": B, "sub_vertical": 4})
+r0 = g["hidrostatica"](tab, 0.0, o14)
 
-    df_ht = st.session_state.df_ht
-    faltando = df_ht is None or not len(df_ht)
+checa("Calado zero: volume nulo", perto(r0["VOL"], 0.0, 1e-12))
+checa("Calado zero: deslocamento nulo", perto(r0["DESL"], 0.0, 1e-12))
+checa("Calado zero: A_WP = area do fundo = L*B", perto(r0["AWP"], L * B, 1e-9),
+      f"{r0['AWP']}")
+checa("Calado zero: LCF = L/2", perto(r0["LCF"], L / 2, 1e-9))
+checa("Calado zero: LCB recebe o LCF (limite quando T -> 0)",
+      perto(r0["LCB"], r0["LCF"], 1e-12))
+checa("Calado zero: KB = 0", perto(r0["KB"], 0.0, 1e-12))
+checa("Calado zero: WSA = area do fundo", perto(r0["WSA"], L * B, 1e-9), f"{r0['WSA']}")
+checa("Calado zero: TPC = rho*A_WP/100", perto(r0["TPC"], 1.025 * L * B / 100, 1e-9))
+checa("Calado zero: C_WP = 1 na barcaca", perto(r0["CWP"], 1.0, 1e-9))
+checa("Calado zero: I_t = L*B^3/12", perto(r0["IT"], L * B ** 3 / 12, 1e-9), f"{r0['IT']}")
+for k in ("BMT", "KMT", "BML", "KML", "CB", "CM", "CP"):
+    checa(f"Calado zero: {g['PROPRIEDADES'][k][0]} fica vazio",
+          not np.isfinite(r0[k]), f"{r0[k]}")
+checa("Calado zero: E_vol nao vira indefinido", perto(r0["E_VOL"], 0.0, 1e-12))
 
-    with a2:
-        if faltando:
-            st.info("Calcule a Hydrostatic Table na primeira aba.")
-        else:
-            disponiveis = list(H.CURVAS_OBRIGATORIAS)
-            for k in H.CURVAS_ESTABILIDADE:
-                col = f"{H.PROPRIEDADES[k][0]} [{H.PROPRIEDADES[k][1]}]"
-                if col in df_ht.columns and np.isfinite(df_ht[col].to_numpy(float)).any():
-                    disponiveis.append(k)
-            escolhidas = st.multiselect("Curvas a exibir", disponiveis,
-                                        default=disponiveis,
-                                        format_func=lambda k: f"T x {H.PROPRIEDADES[k][0]}")
-            if len(disponiveis) == len(H.CURVAS_OBRIGATORIAS):
-                st.caption("Informe o KG na etapa 1 para que as curvas de GM_t, GM_l e "
-                           "MTC tambem sejam tracadas.")
-            if escolhidas:
-                fig = H.plot_curvas(df_ht, escolhidas)
-                st.pyplot(fig, **W())
-                st.download_button("Baixar as curvas (PNG)", H.fig_para_png(fig),
-                                   "hydrostatic_curves.png", "image/png")
-                st.session_state["img_curvas"] = H.fig_para_b64(fig)
-            st.caption("Calado no eixo vertical, como e usual em arquitetura naval.")
+df0, _ = g["tabela_hidrostatica"](tab, 0.0, 4.0, 1.0, o14)
+colT0 = g["coluna_calado"](df0)
+checa("Hydrostatic Table aceita o calado zero como primeira linha",
+      len(df0) == 5 and perto(float(df0[colT0].to_numpy(float)[0]), 0.0, 1e-12),
+      f"{len(df0)} linhas, primeira em T={df0[colT0].to_numpy(float)[0]}")
+checa("Depois do calado zero as demais linhas continuam corretas",
+      perto(float(df0["Vol (adotado) [m3]"].to_numpy(float)[2]), L * B * 2.0, 1e-9))
 
-    with a3:
-        if faltando:
-            st.info("Calcule a Hydrostatic Table na primeira aba.")
-        else:
-            fig = H.plot_diagrama_combinado(df_ht)
-            st.pyplot(fig, **W())
-            st.download_button("Baixar o diagrama (PNG)", H.fig_para_png(fig),
-                               "diagrama_hidrostatico.png", "image/png")
-            st.session_state["img_combinado"] = H.fig_para_b64(fig)
-            st.caption("Cada curva foi dividida pelo proprio maximo para caber no mesmo "
-                       "eixo; o fator de escala aparece na legenda.")
 
-    with a4:
-        if faltando:
-            st.info("Calcule a Hydrostatic Table na primeira aba.")
-        else:
-            colT = _coluna_T(df_ht)
-            Ts = df_ht[colT].to_numpy(float)
-            if len(Ts) < 2:
-                st.warning("A Hydrostatic Table tem um unico calado, entao nao ha o que "
-                           "interpolar. Volte a primeira aba e amplie a faixa ou reduza o "
-                           "passo.")
-                st.dataframe(df_ht.T, **W())
-            else:
-                Tq = slider_seguro("Calado de consulta (m)", Ts.min(), Ts.max(),
-                                   float(np.median(Ts)), key="consulta_T",
-                                   ajuda="Interpolacao linear entre os calados calculados.")
-                saida = H.consultar_curva(df_ht, Tq)
-                st.dataframe(pd.DataFrame([{"Propriedade": k, "Valor": v}
-                                           for k, v in saida.items()]),
-                             hide_index=True, height=520, **W())
-
-    botao_proximo("7. Validacao")
+print("\n" + "=" * 70)
+if falhas:
+    print(f"{len(falhas)} FALHA(S):")
+    for f_ in falhas:
+        print("   -", f_)
+    sys.exit(1)
+print("TODOS OS TESTES PASSARAM.")

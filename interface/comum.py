@@ -323,7 +323,10 @@ def barra_lateral() -> str:
 
             Tmax = limite_calado()
             if Tmax > 1e-9:
-                atual = float(st.session_state.get("T_sel") or Tmax * 0.5)
+                # zero e um calado valido: usar "or" aqui empurrava o calado para
+                # o meio da faixa sempre que ele valesse exatamente zero
+                atual = st.session_state.get("T_sel")
+                atual = float(atual) if isinstance(atual, (int, float)) else Tmax * 0.5
                 st.session_state["T_sel"] = float(min(max(atual, 0.0), Tmax))
                 st.markdown("**Calado de interesse**")
                 teto = calado_maximo()

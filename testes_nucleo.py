@@ -542,6 +542,49 @@ checa("Coluna de GM_t entra na Hydrostatic Table",
       "GM_t [m]" in df_kg.columns and np.isfinite(df_kg["GM_t [m]"].to_numpy(float)).all())
 
 
+
+
+# ============================================================================
+print("\n[13] Calado util e falso alarme de oscilacao")
+
+# barcaca: C_B vale exatamente 1, e a variacao e so ruido de arredondamento
+o13 = dict(opt); o13.update({"LPP": L, "B": B, "sub_vertical": 4})
+df13, _ = g["tabela_hidrostatica"](tab, 0.5, 4.5, 0.5, o13)
+cb13 = df13["C_B [-]"].to_numpy(float)
+checa("Barcaca: C_B constante e igual a 1",
+      bool(np.allclose(cb13, 1.0, atol=1e-12)), f"amplitude {cb13.max()-cb13.min():.2e}")
+
+
+def _oscila(v, limite=2):
+    d = np.diff(v)
+    tol = max(1e-9 * max(abs(v).max(), 1.0), (v.max() - v.min()) * 1e-4)
+    s_ = np.sign(np.where(np.abs(d) <= tol, 0.0, d))
+    s_ = s_[s_ != 0]
+    return (int((np.diff(s_) != 0).sum()) if len(s_) > 1 else 0) > limite
+
+
+checa("Curva constante nao e acusada de oscilar", not _oscila(cb13))
+checa("Curva realmente serrilhada continua sendo detectada",
+      _oscila(np.array([1.0, 1.2, 1.0, 1.2, 1.0, 1.2, 1.0])))
+
+# calado util: tabela com linhas d'agua vazias no topo
+x13 = np.linspace(0, 20, 11)
+z13 = np.linspace(0, 5, 11)
+Y13 = np.tile(np.linspace(0.5, 3.0, 11), (11, 1))
+Y13[:, 8:] = 0.0                      # tres linhas d'agua superiores sem casco
+t13 = g["nova_tabela"](x13, z13, Y13)
+util = g["calado_util"](t13)
+checa("Calado util ignora as linhas d'agua vazias do topo",
+      perto(util, z13[7], 1e-9), f"util={util} de um maximo de {z13[-1]}")
+checa("Diagnostico avisa sobre linhas d'agua acima do casco",
+      "WL-VAZIA" in [a.codigo for a in g["diagnosticar"](t13, {})])
+t13b = g["nova_tabela"](x13, z13, np.tile(np.linspace(0.5, 3.0, 11), (11, 1)))
+checa("Tabela sem linhas vazias: calado util = calado maximo",
+      perto(g["calado_util"](t13b), g["calado_max"](t13b), 1e-9))
+checa("Tabela sem linhas vazias nao dispara o aviso",
+      "WL-VAZIA" not in [a.codigo for a in g["diagnosticar"](t13b, {})])
+
+
 print("\n" + "=" * 70)
 if falhas:
     print(f"{len(falhas)} FALHA(S):")

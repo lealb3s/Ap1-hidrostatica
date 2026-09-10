@@ -33,8 +33,13 @@ def _calcular():
         Tmin = numero_seguro("Calado inicial (m)", 0.001, Tmax_d,
                              max(Tmax_d / 10, 0.001), passo=0.05, key="ht_tmin")
     with c2:
-        Tmax = numero_seguro("Calado final (m)", 0.002, Tmax_d, Tmax_d,
+        T_util = float(H.calado_util(tab))
+        Tmax = numero_seguro("Calado final (m)", 0.002, Tmax_d, min(T_util, Tmax_d),
                              passo=0.05, key="ht_tmax")
+    if T_util < Tmax_d - 1e-6:
+        st.caption(f"A tabela cobre ate {H.fmt(Tmax_d)} m, mas so descreve o casco ate "
+                   f"cerca de {H.fmt(T_util)} m: acima disso as meias-bocas sao nulas "
+                   "ou quase nulas. Por isso o calado final ja vem sugerido nesse valor.")
     with c3:
         dT = numero_seguro("Passo entre calados (m)", 0.001, max(Tmax_d, 0.002),
                            max(Tmax_d / 20, 0.01), passo=0.05, key="ht_dt")
@@ -99,8 +104,15 @@ def _verificar(df_ht):
         v = df_ht[col].to_numpy(float)
         if len(v) < 4 or not np.isfinite(v).all():
             continue
+        # Uma curva constante, como o C_B de uma barcaca paralelepipedica, varia
+        # apenas na ultima casa do ponto flutuante. Sem tolerancia, esse ruido de
+        # arredondamento troca de sinal a cada passo e o aplicativo acusava
+        # oscilacao num casco em que o coeficiente vale exatamente 1.
         d = np.diff(v)
-        trocas = int((np.diff(np.sign(d)) != 0).sum())
+        tol = max(1e-9 * max(abs(v).max(), 1.0), (v.max() - v.min()) * 1e-4)
+        d = np.where(np.abs(d) <= tol, 0.0, d)
+        sinais = np.sign(d[d != 0])
+        trocas = int((np.diff(sinais) != 0).sum()) if len(sinais) > 1 else 0
         linhas.append({"Curva": f"T x {H.PROPRIEDADES[chave][0]}",
                        "Esperado": "sem ziguezague",
                        "Situacao": "OK" if trocas <= 2 else f"OSCILA ({trocas} trocas)"})
@@ -115,7 +127,11 @@ def _diagnostico_oscilacao(df_ht, opt):
     v = df_ht[col].to_numpy(float)
     if len(v) < 4 or not np.isfinite(v).all():
         return ""
-    degraus = int((np.diff(np.sign(np.diff(v))) != 0).sum())
+    d = np.diff(v)
+    tol = max(1e-9 * max(abs(v).max(), 1.0), (v.max() - v.min()) * 1e-4)
+    sinais = np.sign(np.where(np.abs(d) <= tol, 0.0, d))
+    sinais = sinais[sinais != 0]
+    degraus = int((np.diff(sinais) != 0).sum()) if len(sinais) > 1 else 0
     if opt.get("L_ref") == "LWL" and degraus > 2:
         return ("**Causa provavel: o comprimento na linha d'agua.** Voce escolheu L_WL "
                 f"como comprimento dos coeficientes, e ele varia de {H.fmt(v.min())} a "

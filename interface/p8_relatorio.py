@@ -105,7 +105,8 @@ def render():
             if st.session_state.get("ht_params"):
                 ctx["Tmin"], ctx["Tmax"], ctx["dT"] = st.session_state["ht_params"]
 
-            T = float(st.session_state.get("T_sel") or 0.0)
+            T = float(st.session_state.get("T_sel") if isinstance(
+        st.session_state.get("T_sel"), (int, float)) else 0.0)
             if completa and inc_calc and T > 1e-9:
                 r = st.session_state.get("r_atual")
                 if r is None or abs(float(r.get("T", -1)) - T) > 1e-12:

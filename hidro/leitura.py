@@ -137,6 +137,7 @@ class Deteccao:
     lin_rotulo: int | None = None    # linha com rotulos WL0, WL1...
     z_valores: list = field(default_factory=list)
     confianca: int = 0
+    linha_base_incluida: bool = False
     notas: list = field(default_factory=list)
 
 
@@ -165,9 +166,13 @@ def _acha_linha_rotulos_wl(g: pd.DataFrame):
     """
     for r in range(g.shape[0]):
         rotulos = [normtxt(v) for v in g.iloc[r].values]
+        # o sufixo de unidade no fim do rotulo e comum ("LA_0,0183_m", "WL 2.5 m")
+        # e nao pode impedir o reconhecimento: sem aceita-lo, a linha de rotulos
+        # passava despercebida e a tabela inteira era lida na orientacao errada.
         cols = [c for c, t in enumerate(rotulos)
                 if t and re.match(r"^(wl|w\.?l\.?|la|l\.?a\.?|lwl|dwl|linha d'?agua|"
-                                  r"linha dagua|waterline|water line)\s*[-_ ]?[\d.,]*$", t)]
+                                  r"linha dagua|waterline|water line)"
+                                  r"\s*[-_ ]?[\d.,]*\s*[-_ ]?(m|mm|cm|ft|in)?\.?$", t)]
         if len(cols) >= 3:
             return r, cols
     return None, []
@@ -330,6 +335,22 @@ def detectar_layout(g: pd.DataFrame) -> Deteccao:
         d.notas.append("Nao foi possivel delimitar as colunas de meias-bocas.")
         return d
 
+    # A coluna da LINHA DE BASE costuma vir rotulada "BL", "L.B" ou "quilha", logo
+    # antes das linhas d'agua, e e a meia-boca no fundo do casco (z = 0). Sem
+    # inclui-la, a tabela comeca acima da quilha e o volume dessa faixa fica sem
+    # dado, o que muda volume, KB e superficie molhada.
+    _c_base = min(cols_y) - 1
+    if cols_rot and _c_base >= 0 and d.lin_rotulo is not None:
+        _rot_base = normtxt(g.iat[d.lin_rotulo, _c_base])
+        if re.match(r"^(bl|b\.?l\.?|l\.?b\.?|base|linha de base|base ?line|"
+                    r"quilha|keel|z ?0|0)$", _rot_base):
+            cols_y = [_c_base] + list(cols_y)
+            d.linha_base_incluida = True
+            d.notas.append(
+                f"A coluna '{str(g.iat[d.lin_rotulo, _c_base]).strip()}' foi "
+                "reconhecida como a LINHA DE BASE (z = 0) e entrou como a primeira "
+                "linha d'agua.")
+
     # --- 4) colunas X e rotulo da baliza ----------------------------------
     col_x, col_id = None, None
     esquerda = [c for c in range(min(cols_y))]
@@ -396,10 +417,16 @@ def detectar_layout(g: pd.DataFrame) -> Deteccao:
 
     # --- 6) valores de z ---------------------------------------------------
     z = []
+    base_inc = getattr(d, "linha_base_incluida", False)
+    # a coluna da linha de base traz um rotulo de texto ("BL"), e nao um numero:
+    # as alturas sao lidas nas demais colunas e a base entra com z = 0
+    faixa_z = faixa[1:] if base_inc else faixa
     if d.lin_z is not None:
-        z = [num[d.lin_z, c] for c in faixa]
+        z = [num[d.lin_z, c] for c in faixa_z]
     elif d.lin_rotulo is not None:
-        z = _z_dos_rotulos(g, d.lin_rotulo, faixa)
+        z = _z_dos_rotulos(g, d.lin_rotulo, faixa_z)
+    if base_inc and z:
+        z = [0.0] + list(z)
     if z and all(np.isfinite(z)):
         d.z_valores = [float(v) for v in z]
         if d.lin_z is None:

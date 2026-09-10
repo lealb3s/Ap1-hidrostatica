@@ -170,6 +170,34 @@ def diagnosticar(tab: Tabela, principais: dict) -> list:
           "Areas seccionais e A_WP ficam subestimadas; o volume pode ficar menor que o real.",
           "Verifique se houve troca de sinal ou se o valor pertence ao bordo oposto.")
 
+    # --- baliza que some de uma linha d'agua para a outra -------------------
+    #
+    # Um casco pode terminar em bico, mas nao pode existir num nivel e desaparecer
+    # no nivel de cima: e sinal de celula deixada em branco ou zerada por engano.
+    # Um unico zero desses derruba a area do plano d'agua naquele calado e produz
+    # um degrau nas curvas de A_WP, TPC e C_WP.
+    somem = []
+    for i in range(tab.n_est):
+        v = np.nan_to_num(Y[i], nan=0.0)
+        for j in range(1, tab.n_wl):
+            if v[j - 1] > 1e-9 and v[j] <= 1e-9:
+                if np.any(v[j:] > 1e-9) or j < tab.n_wl - 1:
+                    somem.append((tab.rotulos[i], j, float(v[j - 1])))
+                break
+    if somem:
+        detalhe = "; ".join(f"baliza {r} some na WL{j} (valia {fmt(a)} m abaixo)"
+                            for r, j, a in somem[:6])
+        A("GEO-SOME", "AVISO", "Baliza que existe num nivel e desaparece no de cima",
+          f"{len(somem)} baliza(s): {detalhe}" + ("" if len(somem) <= 6 else " ..."),
+          "A meia-boca cai de um valor nao nulo direto para zero ao subir uma linha "
+          "d'agua, e volta a existir mais acima ou simplesmente encerra ali.",
+          "Se for celula em branco tratada como zero, a area do plano d'agua perde "
+          "essa baliza justamente naquele calado, e A_WP, TPC e C_WP ganham um "
+          "degrau que nao existe no casco.",
+          "Confira essas celulas na tabela de trabalho. Se estiverem vazias no "
+          "arquivo original, deixe a interpolacao preenche-las em vez de assumir "
+          "zero para o topo.")
+
     # --- meia-boca maior que a propria boca do navio -----------------------
     if B:
         limite = B / 2.0 * 1.02
@@ -259,6 +287,32 @@ def diagnosticar(tab: Tabela, principais: dict) -> list:
           "As linhas d'agua nao estao igualmente espacadas.",
           "Mesmo efeito: Simpson so sera aplicado nos trechos de passo constante.",
           "Registrado na auditoria da integracao.")
+
+    # --- linhas d'agua acima do costado ------------------------------------
+    larg = np.array([float(np.nansum(np.nan_to_num(Y[:, j], nan=0.0)))
+                     for j in range(tab.n_wl)], float)
+    if len(larg) > 1 and larg.max() > EPS:
+        j_ult = tab.n_wl - 1
+        for j in range(1, len(larg)):
+            if larg[j - 1] > 1e-12 and larg[j] < 0.90 * larg[j - 1]:
+                j_ult = j - 1
+                break
+        if j_ult < tab.n_wl - 1:
+            z_util = float(z[j_ult] - z[0])
+            queda = (1 - larg[j_ult + 1] / larg[j_ult]) * 100 if larg[j_ult] > 0 else 100
+            A("WL-VAZIA", "AVISO", "Linhas d'agua acima do casco descrito",
+              f"da WL{j_ult + 2} (z = {fmt(z[j_ult + 1])} m) para cima, "
+              f"{tab.n_wl - 1 - j_ult} linha(s) d'agua",
+              f"A largura total do casco cai {fmt(queda, 0)} % de uma linha d'agua "
+              "para a seguinte. Acima disso as meias-bocas sao nulas ou quase nulas: "
+              "costuma ser projecao de borda falsa, convés, ou coluna apenas "
+              "preenchida com zero.",
+              "Se a Hydrostatic Table for calculada ate o topo, a area do plano "
+              "d'agua despenca e as curvas parecem quebradas, quando na verdade e a "
+              "geometria que acabou. A_WP, TPC e os coeficientes ficam sem sentido "
+              "nessa faixa.",
+              f"Limite o calado maximo a {fmt(z_util)} m, que e ate onde a tabela "
+              "realmente descreve o casco. A etapa 6 ja sugere esse valor.")
 
     # --- base do casco -----------------------------------------------------
     if len(z) and z[0] > 1e-6:

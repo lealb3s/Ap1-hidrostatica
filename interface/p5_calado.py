@@ -7,7 +7,8 @@ import streamlit as st
 import matplotlib.pyplot as plt
 
 import hidro as H
-from .comum import W, exige_completa, botao_proximo, origem_texto, opcoes
+from .comum import (W, exige_completa, botao_proximo, origem_texto, opcoes,
+                    slider_seguro, numero_seguro, calado_maximo)
 
 
 def resumo_df(r, tab, opt) -> pd.DataFrame:
@@ -144,7 +145,21 @@ def render():
         return
     tab = st.session_state.tab
     opt = opcoes()
-    T = float(st.session_state.get("T_sel") or 0.0)
+    T = float(st.session_state.get("T_sel") if isinstance(
+        st.session_state.get("T_sel"), (int, float)) else 0.0)
+
+    # Slider na propria tela: os resultados estao logo abaixo, e arrastar aqui
+    # evita ir ate a barra lateral e voltar a cada mudanca de calado.
+    Tmax = calado_maximo()
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        T = slider_seguro("Calado T (m)", 0.0, Tmax, T,
+                          passo=max(Tmax / 400, 1e-4),
+                          ajuda="Vale para toda a tela e fica sincronizado com o slider "
+                                "da barra lateral. Pode ser zero.")
+    with c2:
+        T = numero_seguro("ou digite", 0.0, Tmax, T, passo=0.01)
+    st.session_state["T_sel"] = float(T)
 
     if T <= 1e-9:
         st.warning(
@@ -154,8 +169,9 @@ def render():
             "neste calado e a propria area do fundo. KB vale zero e o LCB recebe o LCF, "
             "que e o limite do centro de carena quando o calado tende a zero.")
 
-    st.caption(f"Calado T = {H.fmt(T)} m, medido a partir da linha de base z = "
-               f"{H.fmt(H.z_base(tab))} m. Ajuste na barra lateral.")
+    st.caption(f"Calado medido a partir da linha de base z = {H.fmt(H.z_base(tab))} m. "
+               f"A tabela de cotas cobre ate {H.fmt(H.calado_max(tab))} m, e descreve o "
+               f"casco ate {H.fmt(H.calado_util(tab))} m.")
 
     with st.spinner("Calculando..."):
         r = H.hidrostatica(tab, T, opt)

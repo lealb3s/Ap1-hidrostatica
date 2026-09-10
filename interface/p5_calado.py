@@ -1,256 +1,520 @@
 # -*- coding: utf-8 -*-
-"""Etapa 5: propriedades hidrostaticas em um calado, com a memoria de calculo."""
+"""Nucleo hidrostatico: areas seccionais, plano d'agua, volumes, centros,
+metacentro, coeficientes, superficie molhada e Hydrostatic Table."""
+
+import io
+import re
+import base64
+import datetime as _dt
+from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 import pandas as pd
 import streamlit as st
-import matplotlib.pyplot as plt
 
-import hidro as H
-from .comum import W, exige_completa, botao_proximo, origem_texto, opcoes
+from .base import *       # noqa: F401,F403
+from .tabela import *     # noqa: F401,F403
+from .integracao import *  # noqa: F401,F403
 
 
-def resumo_df(r, tab, opt) -> pd.DataFrame:
-    linhas = []
-    for chave, (rot, uni, casas) in H.PROPRIEDADES.items():
-        if chave not in r:
+# ============================================================================ #
+# S6 - NUCLEO HIDROSTATICO                                                     #
+# ============================================================================ #
+#
+# Convencao interna:
+#   z_base  = altura da primeira linha d'agua (linha de base do casco)
+#   T       = calado medido a PARTIR de z_base
+#   nivel   = z_base + T  (altura absoluta na tabela)
+#   x       = como consta na tabela; a origem de apresentacao e escolhida pelo usuario
+# ---------------------------------------------------------------------------
+
+def z_base(tab: Tabela) -> float:
+    return float(tab.z[0])
+
+
+def calado_max(tab: Tabela) -> float:
+    return float(tab.z[-1] - tab.z[0])
+
+
+SUB_VERTICAL = 4     # subdivisoes por intervalo entre linhas d'agua
+
+
+def malha_vertical(tab: Tabela, T: float, sub: int = None):
+    """
+    Niveis z de z_base ate z_base+T, incluindo o calado como ultimo ponto.
+
+    Cada intervalo entre duas linhas d'agua e subdividido em `sub` partes iguais,
+    mantendo as linhas d'agua originais como nos da malha. Nada de geometria nova
+    e inventado: entre duas linhas d'agua a meia-boca ja e interpolada linearmente.
+    O que se ganha e integracao vertical CONSISTENTE.
+
+    Sem subdividir, a quantidade de intervalos abaixo do calado muda conforme T
+    sobe, e com ela a regra aplicada: um intervalo obriga o Trapezio, dois liberam
+    Simpson 1/3, tres liberam Simpson 3/8. A cada troca a curva da um salto, e em
+    calados baixos, com um unico intervalo, o Trapezio joga toda a area para o topo
+    e devolve KB = T, o que e impossivel. Subdividindo, a mesma regra vale em toda
+    a faixa de calados e as curvas ficam continuas.
+    """
+    sub = SUB_VERTICAL if sub is None else max(int(sub), 1)
+    zb = z_base(tab)
+    nivel = zb + T
+    nos = [float(z) for z in tab.z if z <= nivel + 1e-9]
+    if not nos:
+        nos = [zb]
+    if abs(nos[-1] - nivel) > 1e-9:
+        nos.append(nivel)
+    if sub <= 1 or len(nos) < 2:
+        return np.array(nos, float)
+    fina = [nos[0]]
+    for a, b in zip(nos[:-1], nos[1:]):
+        fina.extend(np.linspace(a, b, sub + 1)[1:])
+    return np.array(fina, float)
+
+
+def y_interp_z(tab: Tabela, i: int, zq: float) -> float:
+    """Meia-boca da baliza i na altura zq (interpolacao linear; extremos mantidos)."""
+    y = tab.Y[i]
+    if not np.isfinite(y).any():
+        return 0.0
+    return float(np.interp(zq, tab.z, np.nan_to_num(y, nan=0.0)))
+
+
+def perfil_secao(tab: Tabela, i: int, T: float, sub=None):
+    """(zs, ys) do contorno submerso da baliza i para o calado T."""
+    zs = malha_vertical(tab, T, sub)
+    ys = np.array([y_interp_z(tab, i, zz) for zz in zs], float)
+    return zs, ys
+
+
+# --- S6.1 Areas seccionais (Modulo 4) --------------------------------------
+
+def areas_seccionais(tab: Tabela, T: float, metodo="auto", sub=None):
+    """
+    A_i(T) = 2 * integral de y dz, de z_base ate z_base+T, para cada baliza.
+    Retorna (A, detalhes) onde detalhes traz a tabela passo a passo por baliza.
+    """
+    A = np.zeros(tab.n_est)
+    detalhes = []
+    for i in range(tab.n_est):
+        zs, ys = perfil_secao(tab, i, T, sub)
+        if len(zs) < 2:
+            A[i] = 0.0
+            detalhes.append({"baliza": tab.rotulos[i], "df": pd.DataFrame(), "aud": [],
+                             "meia_area": 0.0, "area": 0.0})
             continue
-        v = r[chave]
-        if chave in ("LCB", "LCF"):
-            v = H.converter_origem(v, tab, opt.get("origem_x", "tabela"))
-        linhas.append({"Propriedade": rot, "Valor": v, "Unidade": uni})
+        a, mult, plano = pesos_integracao(zs, metodo)
+        meia = float(np.dot(a, ys))
+        A[i] = 2.0 * meia
+        df = pd.DataFrame({"z (m)": zs, "y (m)": ys, "mult.": mult,
+                           "a_i": a, "a_i * y": a * ys})
+        _, aud = integrar(zs, ys, metodo, "WL")
+        detalhes.append({"baliza": tab.rotulos[i], "x": float(tab.x[i]), "df": df,
+                         "aud": aud, "meia_area": meia, "area": float(A[i])})
+    return A, detalhes
+
+
+# --- S6.2 Plano d'agua, LCF e inercias (Modulo 5) --------------------------
+
+def plano_dagua(tab: Tabela, T: float, metodo="auto", eixo_IL="LCF"):
+    """
+    A_WP = 2 * int y dx ; LCF = int x*2y dx / A_WP
+    I_t  = (2/3) * int y^3 dx                      (eixo longitudinal de simetria)
+    I_l  = int x^2 * 2y dx - A_WP * LCF^2          (eixo transversal pelo LCF)
+    """
+    nivel = z_base(tab) + T
+    x = tab.x
+    y = np.array([y_interp_z(tab, i, nivel) for i in range(tab.n_est)], float)
+    y = np.clip(y, 0.0, None)
+
+    a, mult, plano = pesos_integracao(x, metodo)
+    AWP = 2.0 * float(np.dot(a, y))
+    Mx = 2.0 * float(np.dot(a, y * x))                 # momento estatico em relacao a x=0
+    LCF = Mx / AWP if abs(AWP) > EPS else np.nan
+    IT = (2.0 / 3.0) * float(np.dot(a, y ** 3))
+    IL0 = 2.0 * float(np.dot(a, y * x ** 2))           # em relacao a x=0
+    if eixo_IL == "LCF" and np.isfinite(LCF):
+        IL = IL0 - AWP * LCF ** 2                      # teorema dos eixos paralelos
+        eixo_txt = f"eixo transversal pelo LCF (x = {fmt(LCF)} m)"
+    else:
+        xm = 0.5 * (x[0] + x[-1])
+        IL = IL0 - AWP * xm ** 2
+        eixo_txt = f"eixo transversal pela meia-nau (x = {fmt(xm)} m)"
+
+    df = pd.DataFrame({"x (m)": x, "y (m)": y, "mult.": mult, "a_i": a,
+                       "a_i * y": a * y, "a_i * y * x": a * y * x,
+                       "a_i * y^3": a * y ** 3, "a_i * y * x^2": a * y * x ** 2})
+    _, aud = integrar(x, y, metodo, "estacoes")
+
+    largura = 2.0 * float(np.max(y)) if len(y) else np.nan
+
+    # Comprimento na linha d'agua: vai da primeira ate a ultima baliza molhada e,
+    # como o casco se fecha entre balizas, se estende ate a baliza seca vizinha,
+    # que e onde a meia-boca chega a zero no modelo linear.
+    #
+    # Cuidado ao usar L_WL nos coeficientes: ele so pode mudar em degraus do
+    # espacamento das balizas, entao C_B e C_P calculados com ele saem serrilhados.
+    # Para um casco com bulbo ou popa de espelho ele ainda pode diminuir quando o
+    # calado sobe, porque a baliza extrema deixa de estar molhada.
+    molhados = np.where(y > 1e-9)[0]
+    if len(molhados) >= 2:
+        i0 = max(int(molhados[0]) - 1, 0)
+        i1 = min(int(molhados[-1]) + 1, len(x) - 1)
+        LWL = float(x[i1] - x[i0])
+    else:
+        LWL = float(x[-1] - x[0])
+
+    return {"AWP": AWP, "LCF": LCF, "IT": IT, "IL": IL, "IL0": IL0, "Mx": Mx,
+            "y": y, "df": df, "aud": aud, "eixo_IL": eixo_txt,
+            "BWL": largura, "LWL": LWL}
+
+
+# --- S6.3 Volumes (Modulo 6) ----------------------------------------------
+
+def volumes(tab: Tabela, T: float, metodo_x="auto", metodo_z="auto", sub=None):
+    """
+    Vol_L = int A(x) dx        (integracao longitudinal)
+    Vol_V = int A_WP(z) dz     (integracao vertical, caminho independente)
+    E_vol = |Vol_L - Vol_V| / |Vol_L| * 100
+    Tambem devolve LCB (do caminho longitudinal) e KB (do caminho vertical).
+    """
+    A, det_A = areas_seccionais(tab, T, metodo_z, sub)
+    x = tab.x
+    ax, multx, _ = pesos_integracao(x, metodo_x)
+    VOL_L = float(np.dot(ax, A))
+    Mx = float(np.dot(ax, A * x))
+    LCB = Mx / VOL_L if abs(VOL_L) > EPS else np.nan
+    df_L = pd.DataFrame({"x (m)": x, "A(x) (m2)": A, "mult.": multx, "a_i": ax,
+                         "a_i * A": ax * A, "a_i * A * x": ax * A * x})
+    _, aud_L = integrar(x, A, metodo_x, "estacoes")
+
+    zs = malha_vertical(tab, T, sub)
+    AWPz = np.array([plano_dagua(tab, zz - z_base(tab), metodo_x)["AWP"] for zz in zs], float)
+    az, multz, _ = pesos_integracao(zs, metodo_z)
+    VOL_V = float(np.dot(az, AWPz))
+    Mz = float(np.dot(az, AWPz * (zs - z_base(tab))))
+    KB = Mz / VOL_V if abs(VOL_V) > EPS else np.nan
+    df_V = pd.DataFrame({"z (m)": zs, "z - z_base (m)": zs - z_base(tab),
+                         "A_WP(z) (m2)": AWPz, "mult.": multz, "a_i": az,
+                         "a_i * A_WP": az * AWPz,
+                         "a_i * A_WP * z": az * AWPz * (zs - z_base(tab))})
+    _, aud_V = integrar(zs, AWPz, metodo_z, "WL")
+
+    E = abs(VOL_L - VOL_V) / abs(VOL_L) * 100 if abs(VOL_L) > EPS else np.nan
+    return {"A": A, "det_A": det_A, "VOL_L": VOL_L, "VOL_V": VOL_V, "E_VOL": E,
+            "LCB": LCB, "KB": KB, "df_L": df_L, "df_V": df_V,
+            "aud_L": aud_L, "aud_V": aud_V, "AWPz": AWPz, "zs": zs}
+
+
+# --- S6.4 Superficie molhada (item 18) -------------------------------------
+
+def superficie_molhada(tab: Tabela, T: float, metodo_x="auto", sub=None):
+    """
+    Metodo do perimetro molhado (girth):
+      1) em cada baliza, o contorno submerso e discretizado pelos pontos (y, z)
+         da tabela, de z_base ate o calado;
+      2) o semi-perimetro vale  s_i = y(z_base) + SOMA sqrt(dy^2 + dz^2)
+         (a primeira parcela representa a meia-largura do fundo chato);
+      3) WSA = 2 * integral de s(x) dx.
+    Limitacao: nao inclui as areas de popa espelhada nem de proa, e depende da
+    quantidade de linhas d'agua disponiveis.
+    """
+    s = np.zeros(tab.n_est)
+    for i in range(tab.n_est):
+        zs, ys = perfil_secao(tab, i, T, sub)
+        comp = float(ys[0])                      # meia-largura do fundo
+        comp += float(np.sum(np.sqrt(np.diff(ys) ** 2 + np.diff(zs) ** 2)))
+        s[i] = comp
+    a, mult, _ = pesos_integracao(tab.x, metodo_x)
+    WSA = 2.0 * float(np.dot(a, s))
+    df = pd.DataFrame({"x (m)": tab.x, "semi-perimetro s (m)": s, "a_i": a, "a_i * s": a * s})
+    return WSA, df
+
+
+# --- S6.5 Conjunto completo para um calado --------------------------------
+
+def hidrostatica(tab: Tabela, T: float, opt: dict) -> dict:
+    """Calcula todas as propriedades hidrostaticas para o calado T."""
+    mx = opt.get("metodo_x", "auto")
+    mz = opt.get("metodo_z", "auto")
+    rho = float(opt.get("rho", 1.025))
+    eixo_IL = opt.get("eixo_IL", "LCF")
+    sub = opt.get("sub_vertical", SUB_VERTICAL)
+
+    v = volumes(tab, T, mx, mz, sub)
+    pw = plano_dagua(tab, T, mx, eixo_IL)
+    WSA, df_wsa = superficie_molhada(tab, T, mx, sub)
+
+    # --- calado zero -------------------------------------------------------
+    #
+    # Em T = 0 nao ha volume deslocado, mas o plano d'agua do FUNDO existe e tem
+    # area. Por isso algumas grandezas continuam definidas (A_WP, LCF, I_t, TPC,
+    # C_WP e a superficie molhada, que ali e a propria area do fundo) e outras
+    # deixam de existir, porque teriam volume nulo no denominador (BM, KM, C_B,
+    # C_M, C_P). Essas ficam vazias em vez de virarem infinito ou zero inventado.
+    #
+    # KB vale zero: o centro de carena de um volume nulo esta na linha de base.
+    # LCB recebe o LCF, que e o limite do centro de carena quando o calado tende
+    # a zero: a carena se reduz ao proprio plano do fundo. E o mesmo criterio das
+    # tabelas hidrostaticas de referencia, que trazem LCB = LCF na primeira linha.
+    calado_nulo = T <= 1e-9
+
+    escolha = opt.get("volume_adotado", "longitudinal")
+    VOL = {"longitudinal": v["VOL_L"], "vertical": v["VOL_V"],
+           "media": 0.5 * (v["VOL_L"] + v["VOL_V"])}[escolha]
+
+    AWP, LCF, IT, IL = pw["AWP"], pw["LCF"], pw["IT"], pw["IL"]
+    KB, LCB = v["KB"], v["LCB"]
+    if calado_nulo:
+        KB = 0.0
+        LCB = LCF
+
+    BMT = IT / VOL if abs(VOL) > EPS else np.nan
+    BML = IL / VOL if abs(VOL) > EPS else np.nan
+    KMT = KB + BMT
+    KML = KB + BML
+    DESL = rho * VOL
+    TPC = rho * AWP / 100.0
+
+    AM = float(np.max(v["A"])) if len(v["A"]) else np.nan
+    i_am = int(np.argmax(v["A"])) if len(v["A"]) else -1
+
+    # comprimento e boca de referencia para os coeficientes
+    L = float(opt.get("LPP")) if opt.get("L_ref", "LPP") == "LPP" and opt.get("LPP") else pw["LWL"]
+    B = float(opt.get("B")) if opt.get("B_ref", "BWL") == "B" and opt.get("B") else pw["BWL"]
+
+    CB = VOL / (L * B * T) if L and B and T > EPS else np.nan
+    CWP = AWP / (L * B) if L and B else np.nan
+    CM = AM / (B * T) if B and T > EPS else np.nan
+    CP = VOL / (AM * L) if AM and L and abs(AM) > EPS else np.nan
+
+    # Referencia vertical (item 5 do enunciado). O calado MOLDADO e medido a partir
+    # da linha de base da tabela de cotas; o EXTREMO inclui a espessura da chapa de
+    # quilha. As tabelas hidrostaticas de estaleiro trazem os dois, e comparar o
+    # numero errado com o Maxsurf produz uma diferenca que nao existe.
+    quilha = float(opt.get("espessura_quilha", 0.0) or 0.0)
+
+    # KG e um DADO DE ENTRADA: depende de onde estao os pesos a bordo, e nenhuma
+    # tabela de cotas contem essa informacao. Sem KG nao existe GM nem MTC, e o
+    # aplicativo devolve esses campos vazios em vez de inventar um valor.
+    KG = opt.get("KG")
+    KG = float(KG) if KG not in (None, "", 0, 0.0) else np.nan
+
+    E_vol = 0.0 if calado_nulo else v["E_VOL"]
+
+    r = {"T": T, "T_EXT": T + quilha, "quilha": quilha, "nivel": z_base(tab) + T,
+         "calado_nulo": calado_nulo,
+         "VOL_L": v["VOL_L"], "VOL_V": v["VOL_V"], "VOL": VOL, "E_VOL": E_vol,
+         "DESL": DESL, "LCB": LCB, "LCF": LCF, "KB": KB,
+         "BMT": BMT, "KMT": KMT, "BML": BML, "KML": KML,
+         "AWP": AWP, "IT": IT, "IL": IL, "TPC": TPC, "WSA": WSA,
+         "AM": AM, "i_AM": i_am, "BWL": pw["BWL"], "LWL": pw["LWL"],
+         "CB": CB, "CWP": CWP, "CM": CM, "CP": CP,
+         "KG": KG, "GMT": KMT - KG, "GML": KML - KG,
+         "MTC": (DESL * (KML - KG)) / (100.0 * L) if (L and np.isfinite(KG)) else np.nan,
+         "L_usado": L, "B_usado": B, "rho": rho,
+         "_vol": v, "_pw": pw, "_wsa_df": df_wsa}
+    return r
+
+
+def converter_origem(valor_x, tab: Tabela, origem: str, LPP=None):
+    """Converte uma abscissa da referencia da tabela para a referencia de apresentacao."""
+    if valor_x is None or not np.isfinite(valor_x):
+        return np.nan
+    x0, x1 = float(tab.x[0]), float(tab.x[-1])
+    if origem == "tabela":
+        return valor_x
+    if origem == "pp_re":            # x = 0 na perpendicular de re
+        return valor_x - min(x0, x1)
+    if origem == "meia_nau":         # x = 0 na meia-nau (positivo para vante)
+        return valor_x - 0.5 * (x0 + x1)
+    return valor_x
+
+
+# ============================================================================ #
+# S7 - HYDROSTATIC TABLE E HYDROSTATIC CURVES                                  #
+# ============================================================================ #
+
+def tabela_hidrostatica(tab: Tabela, Tmin, Tmax, dT, opt: dict, barra=None):
+    """Executa o calculo para T1, T2, ..., Tn e devolve DataFrame + lista bruta."""
+    if dT <= 0:
+        raise ValueError("O incremento de calado deve ser positivo.")
+    n = int(np.floor((Tmax - Tmin) / dT + 1e-9)) + 1
+    calados = [Tmin + k * dT for k in range(n)]
+    if calados and abs(calados[-1] - Tmax) > 1e-9 and calados[-1] < Tmax:
+        calados.append(Tmax)
+
+    linhas, brutos = [], []
+    for k, T in enumerate(calados):
+        if T < -1e-9:
+            continue
+        r = hidrostatica(tab, max(float(T), 0.0), opt)
+        brutos.append(r)
+        linha = {}
+        for chave, (rot, uni, casas) in PROPRIEDADES.items():
+            if chave in r:
+                val = r[chave]
+                if chave in ("LCB", "LCF"):
+                    val = converter_origem(val, tab, opt.get("origem_x", "tabela"),
+                                           opt.get("LPP"))
+                linha[f"{rot} [{uni}]"] = val
+        linhas.append(linha)
+        if barra is not None:
+            barra.progress(min(1.0, (k + 1) / max(len(calados), 1)))
+    return pd.DataFrame(linhas), brutos
+
+
+def consultar_curva(df: pd.DataFrame, T_consulta: float) -> dict:
+    """Interpola numericamente um ponto qualquer das curvas hidrostaticas."""
+    colT = coluna_calado(df)
+    if colT is None:
+        raise ValueError("A tabela nao tem coluna de calado: refaca a Hydrostatic Table.")
+    Ts = df[colT].to_numpy(float)
+    saida = {"T [m]": T_consulta}
+    for c in df.columns:
+        if c == colT:
+            continue
+        vals = df[c].to_numpy(float)
+        bons = np.isfinite(vals) & np.isfinite(Ts)
+        saida[c] = (float(np.interp(T_consulta, Ts[bons], vals[bons]))
+                    if bons.sum() >= 2 else np.nan)
+    return saida
+
+
+def verificacoes_internas(r: dict) -> pd.DataFrame:
+    """Validacao 2 do enunciado: consistencia interna."""
+    linhas = []
+
+    def add(nome, esperado, obtido, unidade=""):
+        erro = abs(obtido - esperado)
+        rel = erro / abs(esperado) * 100 if abs(esperado) > EPS else np.nan
+        linhas.append({"Verificacao": nome, "Esperado": esperado, "Obtido": obtido,
+                       "Erro absoluto": erro, "Erro (%)": rel, "Unidade": unidade})
+
+    add("Volume longitudinal x vertical", r["VOL_L"], r["VOL_V"], "m3")
+    add("KM_t = KB + BM_t", r["KB"] + r["BMT"], r["KMT"], "m")
+    add("KM_l = KB + BM_l", r["KB"] + r["BML"], r["KML"], "m")
+    add("C_B = C_M * C_P", r["CM"] * r["CP"], r["CB"], "-")
+    add("Delta = rho * Vol", r["rho"] * r["VOL"], r["DESL"], "t")
     return pd.DataFrame(linhas)
 
 
-def _mostrar_calculo(chave, r, tab, opt, T):
-    rot, uni, casas = H.PROPRIEDADES[chave]
-    v, pw = r["_vol"], r["_pw"]
-    st.markdown(f"### {rot}   [{uni}]")
-
-    if chave in ("VOL_L", "VOL", "LCB"):
-        st.markdown("**Dados usados:** area seccional A(x) de cada baliza no calado atual.")
-        st.latex(r"\nabla_L=\int A(x)\,dx \approx \sum a_i A_i \qquad "
-                 r"LCB=\frac{\sum a_i A_i x_i}{\nabla}")
-        st.dataframe(v["df_L"], hide_index=True, **W())
-        st.markdown(f"**Auditoria:** `{H.auditoria_texto(v['aud_L'])}`")
-        st.markdown(f"**Resultado:** Vol_L = **{H.fmt(v['VOL_L'])} m3**  |  "
-                    f"LCB = {H.fmt(np.sum(v['df_L']['a_i * A * x']))} / {H.fmt(v['VOL_L'])} = "
-                    f"**{H.fmt(H.converter_origem(v['LCB'], tab, opt['origem_x']))} m** "
-                    f"({origem_texto(opt)})")
-
-    elif chave in ("VOL_V", "KB", "E_VOL"):
-        st.markdown("**Dados usados:** area do plano d'agua em cada linha d'agua ate o calado.")
-        st.latex(r"\nabla_V=\int_0^T A_{WP}(z)\,dz \qquad KB=\frac{\int_0^T z A_{WP}\,dz}{\nabla_V}")
-        st.dataframe(v["df_V"], hide_index=True, **W())
-        st.markdown(f"**Auditoria:** `{H.auditoria_texto(v['aud_V'])}`")
-        st.markdown(f"**Resultado:** Vol_V = **{H.fmt(v['VOL_V'])} m3**  |  "
-                    f"KB = **{H.fmt(v['KB'], 4)} m**  |  E_vol = **{H.fmt(v['E_VOL'], 4)} %**")
-
-    elif chave in ("AWP", "LCF", "IT", "IL", "TPC", "CWP"):
-        st.markdown("**Dados usados:** meia-boca de cada baliza na altura do calado.")
-        st.latex(r"A_{WP}=2\int y\,dx \quad LCF=\frac{\int 2xy\,dx}{A_{WP}} \quad "
-                 r"I_t=\frac{2}{3}\int y^3 dx \quad I_l=\int 2x^2y\,dx-A_{WP}LCF^2")
-        st.dataframe(pw["df"], hide_index=True, **W())
-        st.markdown(f"**Auditoria:** `{H.auditoria_texto(pw['aud'])}`")
-        st.markdown(
-            f"**Resultado:** A_WP = **{H.fmt(r['AWP'])} m2**  |  "
-            f"LCF = **{H.fmt(H.converter_origem(r['LCF'], tab, opt['origem_x']))} m**  |  "
-            f"I_t = **{H.fmt(r['IT'])} m4**  |  I_l = **{H.fmt(r['IL'])} m4** "
-            f"({pw['eixo_IL']})  |  TPC = **{H.fmt(r['TPC'], 4)} t/cm**")
-
-    elif chave == "WSA":
-        st.markdown("**Dados usados:** contorno submerso de cada baliza.")
-        st.latex(r"s_i=y_i(z_{base})+\sum\sqrt{\Delta y^2+\Delta z^2}\qquad WSA=2\int s\,dx")
-        st.dataframe(r["_wsa_df"], hide_index=True, **W())
-        st.markdown(f"**Resultado:** WSA = **{H.fmt(r['WSA'])} m2**")
-        st.caption("Nao inclui popa espelhada, apendices, leme nem helice.")
-
-    elif chave in ("BMT", "KMT", "BML", "KML"):
-        st.latex(r"BM_t=\frac{I_t}{\nabla}\quad KM_t=KB+BM_t\quad "
-                 r"BM_l=\frac{I_l}{\nabla}\quad KM_l=KB+BM_l")
-        st.markdown(
-            f"I_t = {H.fmt(r['IT'])} m4  |  I_l = {H.fmt(r['IL'])} m4  |  "
-            f"Vol = {H.fmt(r['VOL'])} m3  |  KB = {H.fmt(r['KB'], 4)} m\n\n"
-            f"BM_t = **{H.fmt(r['BMT'], 4)} m**  |  KM_t = **{H.fmt(r['KMT'], 4)} m**  |  "
-            f"BM_l = **{H.fmt(r['BML'], 4)} m**  |  KM_l = **{H.fmt(r['KML'], 4)} m**")
-
-    elif chave in ("KG", "GMT", "GML", "MTC"):
-        st.markdown("**Dados usados:** KM calculado a partir do casco e KG informado "
-                    "por voce na etapa 1.")
-        st.latex(r"GM_t=KM_t-KG\qquad GM_l=KM_l-KG\qquad "
-                 r"MTC=\frac{\Delta\,GM_l}{100\,L}")
-        if not np.isfinite(r.get("KG", np.nan)):
-            st.warning("O KG nao foi informado na etapa 1, entao GM_t, GM_l e MTC nao "
-                       "podem ser calculados. KG depende da distribuicao de pesos a "
-                       "bordo e nao esta na tabela de cotas.")
-        else:
-            st.markdown(
-                f"KM_t = {H.fmt(r['KMT'], 4)} m &nbsp; KM_l = {H.fmt(r['KML'], 4)} m "
-                f"&nbsp; KG = {H.fmt(r['KG'], 4)} m &nbsp; Delta = {H.fmt(r['DESL'])} t "
-                f"&nbsp; L = {H.fmt(r['L_usado'])} m\n\n"
-                f"GM_t = {H.fmt(r['KMT'], 4)} - {H.fmt(r['KG'], 4)} = "
-                f"**{H.fmt(r['GMT'], 4)} m**\n\n"
-                f"GM_l = {H.fmt(r['KML'], 4)} - {H.fmt(r['KG'], 4)} = "
-                f"**{H.fmt(r['GML'], 4)} m**\n\n"
-                f"MTC = ({H.fmt(r['DESL'])} x {H.fmt(r['GML'], 4)}) / (100 x "
-                f"{H.fmt(r['L_usado'])}) = **{H.fmt(r['MTC'], 4)} t.m/cm**")
-            st.caption("MTC e o momento necessario para alterar o trim em um "
-                       "centimetro. Como depende do GM_l, tambem depende do KG.")
-
-    elif chave == "DESL":
-        st.latex(r"\Delta=\rho\nabla")
-        st.markdown(f"Delta = {H.fmt(r['rho'], 4)} x {H.fmt(r['VOL'])} = "
-                    f"**{H.fmt(r['DESL'])} t**")
-
-    elif chave in ("CB", "CM", "CP", "AM", "BWL", "LWL"):
-        st.latex(r"C_B=\frac{\nabla}{LBT}\quad C_{WP}=\frac{A_{WP}}{LB}\quad "
-                 r"C_M=\frac{A_M}{BT}\quad C_P=\frac{\nabla}{A_M L}")
-        st.markdown(
-            f"L = {H.fmt(r['L_usado'])} m ({opt['L_ref']})  |  B = {H.fmt(r['B_usado'])} m "
-            f"({opt['B_ref']})  |  T = {H.fmt(T)} m  |  A_M = {H.fmt(r['AM'])} m2 "
-            f"(baliza {tab.rotulos[r['i_AM']]})\n\n"
-            f"C_B = **{H.fmt(r['CB'], 4)}**  |  C_WP = **{H.fmt(r['CWP'], 4)}**  |  "
-            f"C_M = **{H.fmt(r['CM'], 4)}**  |  C_P = **{H.fmt(r['CP'], 4)}**")
-        dif = abs(r["CB"] - r["CM"] * r["CP"])
-        if np.isfinite(dif) and dif > 1e-4:
-            st.warning(f"C_B difere de C_M x C_P em {H.fmt(dif, 6)}. Como as quatro "
-                       "definicoes usam o mesmo L, B e T, a identidade deveria ser exata.")
-        else:
-            st.success(f"Verificacao C_B = C_M x C_P satisfeita "
-                       f"({H.fmt(r['CB'], 5)} = {H.fmt(r['CM'] * r['CP'], 5)}).")
-
-    else:
-        st.markdown("**Dados usados:** meias-bocas da baliza do fundo ate o calado.")
-        st.latex(r"A_i(T)=2\int_0^T y(x_i,z)\,dz \approx 2\sum a_j y_j")
-        i = st.selectbox("Baliza", list(range(tab.n_est)),
-                         format_func=lambda i: f"{tab.rotulos[i]}  (x = {H.fmt(tab.x[i], 2)} m)",
-                         key="baliza_detalhe")
-        det = v["det_A"][i]
-        c1, c2 = st.columns([1.4, 1])
-        with c1:
-            st.dataframe(det["df"], hide_index=True, **W())
-            st.markdown(f"**Auditoria:** `{H.auditoria_texto(det['aud'])}`")
-            st.markdown(f"**Resultado:** A = 2 x {H.fmt(det['meia_area'])} = "
-                        f"**{H.fmt(det['area'])} m2**")
-        with c2:
-            fig = H.plot_secao(tab, i, T)
-            st.pyplot(fig, **W())
-            plt.close(fig)
+def barcaca_teste(L=40.0, B=10.0, D=5.0, n_est=11, n_wl=11) -> Tabela:
+    """Barcaca paralelepipedica para a Validacao 1 (solucao analitica conhecida)."""
+    x = np.linspace(0.0, L, n_est)
+    z = np.linspace(0.0, D, n_wl)
+    Y = np.full((n_est, n_wl), B / 2.0)
+    t = nova_tabela(x, z, Y, [str(i) for i in range(n_est)])
+    return t
 
 
-def render():
-    st.title("5. Resultados no calado")
-    if not exige_completa():
-        return
-    tab = st.session_state.tab
-    opt = opcoes()
-    T = float(st.session_state.get("T_sel") or 0.0)
+def validacao_analitica(r: dict, L, B, T, rho=1.025) -> pd.DataFrame:
+    """Compara o resultado do aplicativo com a solucao analitica da barcaca."""
+    ana = {"Vol (m3)": L * B * T, "KB (m)": T / 2.0, "LCB (m)": L / 2.0,
+           "LCF (m)": L / 2.0, "A_WP (m2)": L * B, "BM_t (m)": B ** 2 / (12.0 * T),
+           "C_B": 1.0, "C_WP": 1.0, "C_M": 1.0, "C_P": 1.0,
+           "Delta (t)": rho * L * B * T}
+    app = {"Vol (m3)": r["VOL"], "KB (m)": r["KB"], "LCB (m)": r["LCB"],
+           "LCF (m)": r["LCF"], "A_WP (m2)": r["AWP"], "BM_t (m)": r["BMT"],
+           "C_B": r["CB"], "C_WP": r["CWP"], "C_M": r["CM"], "C_P": r["CP"],
+           "Delta (t)": r["DESL"]}
+    linhas = []
+    for k in ana:
+        a, b = ana[k], app[k]
+        err = abs(b - a) / abs(a) * 100 if abs(a) > EPS else np.nan
+        linhas.append({"Grandeza": k, "Analitico": a, "Aplicativo": b, "Erro (%)": err})
+    return pd.DataFrame(linhas)
 
-    if T <= 1e-9:
-        st.warning(
-            "**Calado zero.** Nao ha volume deslocado, entao Delta, BM_t, BM_l, KM_t, "
-            "KM_l, C_B, C_M e C_P ficam vazios: todos teriam o volume no denominador. "
-            "Continuam definidos A_WP, LCF, I_t, TPC, C_WP e a superficie molhada, que "
-            "neste calado e a propria area do fundo. KB vale zero e o LCB recebe o LCF, "
-            "que e o limite do centro de carena quando o calado tende a zero.")
 
-    st.caption(f"Calado T = {H.fmt(T)} m, medido a partir da linha de base z = "
-               f"{H.fmt(H.z_base(tab))} m. Ajuste na barra lateral.")
+def auditoria_por_calado(tab: Tabela, calados, metodo_x="auto", metodo_z="auto"):
+    """
+    Para cada calado, informa quantas linhas d'agua entram na integracao vertical
+    e quais regras sao efetivamente aplicadas nos dois eixos.
 
-    with st.spinner("Calculando..."):
-        r = H.hidrostatica(tab, T, opt)
-    st.session_state["r_atual"] = r
+    Isso responde a pergunta "o metodo se comporta igual em todos os calados?".
+    A resposta costuma ser NAO: em calados baixos entram poucas linhas d'agua e o
+    aplicativo cai para o Trapezio; alem disso, quando o calado nao coincide com
+    uma linha d'agua, o ultimo trecho e parcial e tambem vira Trapezio.
+    """
+    linhas = []
+    plano_x = planejar_integracao(tab.x, metodo_x)
+    regra_x = " ; ".join(f"{a}-{b}: {m}" for a, b, m in plano_x)
+    for T in calados:
+        zs = malha_vertical(tab, T)
+        plano_z = planejar_integracao(zs, metodo_z)
+        regras = [m for _, _, m in plano_z]
+        parcial = abs((z_base(tab) + T) - tab.z[np.searchsorted(
+            tab.z, z_base(tab) + T, side="right") - 1]) > 1e-9
+        linhas.append({
+            "T (m)": float(T),
+            "WL usadas": len(zs),
+            "Intervalos": len(zs) - 1,
+            "Regras no eixo z": " ; ".join(f"{a}-{b}: {m}" for a, b, m in plano_z) or "-",
+            "So Simpson?": "sim" if regras and all("Simpson" in m for m in regras) else "nao",
+            "Ultimo trecho parcial": "sim" if parcial else "nao",
+            "Regras no eixo x": regra_x,
+        })
+    return pd.DataFrame(linhas)
 
-    c = st.columns(6)
-    for col, (k, rot) in zip(c, [("VOL", "Volume"), ("DESL", "Deslocamento"),
-                                 ("AWP", "A_WP"), ("KB", "KB"), ("KMT", "KM_t"),
-                                 ("TPC", "TPC")]):
-        _, uni, casas = H.PROPRIEDADES[k]
-        col.metric(f"{rot} [{uni}]", H.fmt(r[k], casas))
-    c = st.columns(6)
-    for col, (k, rot) in zip(c, [("LCB", "LCB"), ("LCF", "LCF"), ("BMT", "BM_t"),
-                                 ("BML", "BM_l"), ("CB", "C_B"), ("WSA", "WSA")]):
-        _, uni, casas = H.PROPRIEDADES[k]
-        v = H.converter_origem(r[k], tab, opt["origem_x"]) if k in ("LCB", "LCF") else r[k]
-        col.metric(f"{rot} [{uni}]", H.fmt(v, casas))
-    st.caption(f"LCB e LCF apresentados com {origem_texto(opt)}.")
 
-    if np.isfinite(r.get("GMT", np.nan)):
-        c = st.columns(4)
-        c[0].metric("KG informado [m]", H.fmt(r["KG"], 4))
-        c[1].metric("GM_t [m]", H.fmt(r["GMT"], 4))
-        c[2].metric("GM_l [m]", H.fmt(r["GML"], 4))
-        c[3].metric("MTC [t.m/cm]", H.fmt(r["MTC"], 4))
-        if r["GMT"] > 0.15:
-            st.success(f"GM_t = KM_t - KG = {H.fmt(r['KMT'], 4)} - {H.fmt(r['KG'], 4)} = "
-                       f"**{H.fmt(r['GMT'], 4)} m**, positivo: nesta condicao a "
-                       "embarcacao tem estabilidade inicial. O valor minimo aceitavel "
-                       "depende da norma aplicavel ao tipo de embarcacao.")
-        elif r["GMT"] > 0:
-            st.warning(f"GM_t = {H.fmt(r['GMT'], 4)} m. Positivo, porem pequeno: a "
-                       "embarcacao volta ao prumo devagar e fica sensivel a pequenas "
-                       "mudancas de carregamento.")
-        else:
-            st.error(f"GM_t = {H.fmt(r['GMT'], 4)} m, negativo ou nulo. Nesta condicao a "
-                     "embarcacao nao tem estabilidade inicial: ela adernaria ate "
-                     "encontrar equilibrio em algum angulo. Confira o KG informado.")
-        st.caption("GM_t e GM_l dependem do KG, que e dado de entrada. O casco define "
-                   "ate o KM; o resto vem do carregamento.")
+def coerencia_alturas(tab: Tabela, principais: dict) -> str:
+    """
+    Verifica se a altura total coberta pelas linhas d'agua faz sentido diante das
+    dimensoes informadas. Retorna texto de alerta, ou string vazia se estiver bem.
+    Este e o teste que pega o erro mais destrutivo de todos: alturas z lidas da
+    linha errada da planilha, o que colapsa a faixa de calados possiveis.
+    """
+    alt = float(tab.z[-1] - tab.z[0])
+    comp = float(abs(tab.x[-1] - tab.x[0]))
+    D = principais.get("D") or 0.0
+    Td = principais.get("Td") or 0.0
+    B = principais.get("B") or 0.0
+    problemas = []
+    if alt <= 1e-9:
+        problemas.append("a altura total coberta e nula")
+    if comp > 1e-9 and alt > 1e-9 and alt < 0.02 * comp:
+        problemas.append(f"a altura coberta ({fmt(alt)} m) e menos de 2 % do comprimento "
+                         f"({fmt(comp)} m), o que nenhuma embarcacao real apresenta")
+    if D > 0 and alt > 1e-9 and (alt < 0.3 * D or alt > 3.0 * D):
+        problemas.append(f"a altura coberta ({fmt(alt)} m) destoa do pontal informado "
+                         f"({fmt(D)} m)")
+    if Td > 0 and alt > 1e-9 and alt < Td:
+        problemas.append(f"a altura coberta ({fmt(alt)} m) e menor que o proprio calado de "
+                         f"projeto ({fmt(Td)} m): o calado de projeto ficaria inalcancavel")
+    if B > 0 and alt > 1e-9 and alt < 0.05 * B:
+        problemas.append(f"a altura coberta ({fmt(alt)} m) e despropositada diante da boca "
+                         f"({fmt(B)} m)")
+    return "; ".join(problemas)
 
-    a1, a2, a3, a4 = st.tabs(["Todas as propriedades", "Conferencia do volume",
-                              "Areas seccionais", "Mostrar calculo"])
 
-    with a1:
-        st.dataframe(resumo_df(r, tab, opt), hide_index=True, height=560, **W())
+def larguras_por_linha(tab: Tabela) -> np.ndarray:
+    """Soma das meias-bocas em cada linha d'agua: mede quanto casco ha em cada nivel."""
+    return np.array([float(np.nansum(np.nan_to_num(tab.Y[:, j], nan=0.0)))
+                     for j in range(tab.n_wl)], float)
 
-    with a2:
-        st.caption("O volume e obtido por dois caminhos independentes. A diferenca entre "
-                   "eles mede a qualidade da malha.")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Vol longitudinal [m3]", H.fmt(r["VOL_L"]))
-        c2.metric("Vol vertical [m3]", H.fmt(r["VOL_V"]))
-        c3.metric("Diferenca [%]", H.fmt(r["E_VOL"], 4))
-        E = r["E_VOL"]
-        if not np.isfinite(E):
-            texto = "Nao foi possivel comparar os dois caminhos."
-            st.error(texto)
-        elif E < 0.5:
-            texto = (f"Diferenca de {H.fmt(E, 4)} %, compativel com o erro de discretizacao "
-                     "das duas integracoes. A malha descreve a carena de forma coerente.")
-            st.success(texto)
-        elif E < 2.0:
-            texto = (f"Diferenca de {H.fmt(E, 4)} %. Costuma vir de poucas linhas d'agua "
-                     "perto do fundo, de mudanca brusca de forma nas extremidades ou do "
-                     "trecho parcial ate o calado escolhido.")
-            st.warning(texto)
-        else:
-            texto = (f"Diferenca de {H.fmt(E, 4)} %. Os dois caminhos deveriam dar o mesmo "
-                     "volume; uma divergencia desse tamanho aponta malha insuficiente, "
-                     "hipotese inadequada no fundo ou erro na tabela de cotas. Deslocamento, "
-                     "KB, BM e os coeficientes herdam esse erro.")
-            st.error(texto)
-        st.session_state["interp_evol"] = texto
 
-    with a3:
-        A = r["_vol"]["A"]
-        df_areas = pd.DataFrame({
-            "Baliza": tab.rotulos,
-            "x (m)": [H.converter_origem(v, tab, opt["origem_x"]) for v in tab.x],
-            "A_i (m2)": A})
-        st.session_state["df_areas"] = df_areas
-        c1, c2 = st.columns([1.7, 1])
-        with c1:
-            fig = H.plot_areas_seccionais(tab, A, T, opt["origem_x"])
-            st.pyplot(fig, **W())
-            st.session_state["img_areas"] = H.fig_para_b64(fig)
-        with c2:
-            st.dataframe(df_areas, hide_index=True, height=360, **W())
+def indice_util(tab: Tabela, queda: float = 0.90) -> int:
+    """
+    Indice da linha d'agua mais alta ate onde a tabela ainda descreve o casco.
 
-    with a4:
-        st.caption("Dados usados, formula, valores intermediarios, resultado e unidade.")
-        chave = st.selectbox("Propriedade", list(H.PROPRIEDADES.keys()),
-                             format_func=lambda k: H.PROPRIEDADES[k][0], index=2)
-        with st.container(border=True):
-            _mostrar_calculo(chave, r, tab, opt, T)
+    O criterio e a QUEDA BRUSCA de um nivel para o seguinte, e nao um patamar
+    minimo. Subindo a partir da quilha, a largura total de um casco real cresce ou
+    no maximo encolhe de leve (tumblehome). Quando ela despenca de um nivel para o
+    outro, acabou o casco: dali para cima o que existe e projecao de borda falsa,
+    convés, ou coluna preenchida com zero.
 
-    botao_proximo("6. Tabela e curvas")
+    Um limiar de patamar nao serve: a propria linha em que a queda acontece pode
+    ficar acima dele, e A_WP ja cai ali.
+    """
+    larg = larguras_por_linha(tab)
+    if len(larg) < 2 or larg.max() <= EPS:
+        return tab.n_wl - 1
+    for j in range(1, len(larg)):
+        if larg[j - 1] > EPS and larg[j] < queda * larg[j - 1]:
+            return j - 1
+    return tab.n_wl - 1
+
+
+def calado_util(tab: Tabela, queda: float = 0.90) -> float:
+    """Calado, medido da linha de base, ate onde a tabela descreve o casco."""
+    return float(tab.z[indice_util(tab, queda)] - tab.z[0])

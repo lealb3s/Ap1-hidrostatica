@@ -1,0 +1,5 @@
+A validacao 2 NAO foi concluida: nenhuma curva GZ externa comprovada foi fornecida.
+Exporte do Maxsurf Stability ou extraia de referencia publicada os angulos e GZ sob mesmas condicoes.
+Preencha modelo_validacao_2_PREENCHER.csv com valores reais e remova valores vazios.
+Carregue o CSV na aba AP1.3. Inclua fonte, versao, geometria, Delta, KG e densidade no relatorio.
+Nao utilize a propria saida deste codigo como validacao 2 independente.
